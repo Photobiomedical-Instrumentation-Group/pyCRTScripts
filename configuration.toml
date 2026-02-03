@@ -1,0 +1,28 @@
+[Files]
+
+plotPath = "Plots"
+csvPath = "results_sheet.csv"
+npzPath = "Npz"
+overwrite = true
+
+[Video]
+
+rescaleFactor = 0.5
+livePlot = true
+displayVideo = true
+playbackSpeed = "fast"
+
+[Measurement]
+
+sliceMethod = "from local max"
+fromTime = 0
+toTime = inf
+exclusionCriteria = 0.20
+exclusionMethod = "first positive peak"
+channel = "g"
+initialGuesses = [1.0, -0.3, 0.0]
+roi = -1
+
+[General]
+
+logLevel = "INFO"
