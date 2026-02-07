@@ -1,21 +1,29 @@
 from __future__ import annotations
 
 import logging
-import tkinter as tk
 from pathlib import Path
-from tkinter import filedialog
 from typing import Any
+import gui
 
 import numpy as np
 import pandas as pd
-import tomli
-from pyCRT.simpleUI import PCRT, RoiTuple
+
+try:
+    import tomllib as tomli  # Python 3.11+
+except ModuleNotFoundError:
+    import tomli  # fallback for older Python
+
+from pyCRT.simpleUI import DATETIME_FORMAT, PCRT, RoiTuple
 
 PLAYBACK_FPS_SPEED = {
     "fast": np.inf,
     "normal": 0,
     "slow": 25,
 }
+
+NORM_LEVEL = 25
+logging.addLevelName(NORM_LEVEL, "NORM")
+VIDEO_FORMATS = (".mp4", ".wmv", ".avi", ".mov", ".mkv")
 
 
 def getLogger(name: str):
@@ -34,21 +42,6 @@ def getLogger(name: str):
 
 LOGGER = getLogger("mauricio")
 
-
-def selectFile() -> Path:
-    # {{{
-    root = tk.Tk()
-    root.withdraw()  # hide main window
-    root.attributes("-topmost", True)
-    selection = filedialog.askopenfilename()
-    if not selection:
-        raise RuntimeError("No video selected. Aborting...")
-    filePath = Path(selection)
-    root.destroy()
-    return filePath
-
-
-# }}}
 
 
 def loadConfigFile(
@@ -221,7 +214,7 @@ def saveCSV(
     overwrite: bool = False,
 ) -> None:
     # {{{
-    colLabels = ["pCRT", "Unc", "RelUnc", "CT", "ExcCri", "ExcMet"]
+    colLabels = ["pCRT", "Unc", "RelUnc", "CT", "ExcCri", "ExcMet", "Time"]
 
     row = {
         "pCRT": round(float(pcrtObj.pCRT[0]), 3),
@@ -230,6 +223,7 @@ def saveCSV(
         "CT": round(float(pcrtObj.criticalTime), 3),
         "ExcCri": pcrtObj.exclusionCriteria,
         "ExcMet": pcrtObj.exclusionMethod,
+        "Time": pcrtObj.dateTime.strftime(DATETIME_FORMAT),
     }
 
     csvPath = Path(csvPath)
@@ -275,21 +269,11 @@ def saveNpz(
     npzFilePath = npzPath / f"{videoName}.npz"
     if not overwrite:
         npzFilePath = findUniquePath(npzFilePath)
-    np.savez(
-        str(npzFilePath),
-        fullTimeScdsArr=pcrtObj.fullTimeScdsArr,
-        channelsAvgIntensArr=pcrtObj.channelsAvgIntensArr,
-        channel=pcrtObj.channel,
-        fromTime=pcrtObj.fromTime,
-        toTime=pcrtObj.toTime,
-        expTuple=np.array(pcrtObj.expTuple),
-        polyTuple=np.array(pcrtObj.polyTuple),
-        pCRTTuple=np.array(pcrtObj.pCRTTuple),
-        criticalTime=pcrtObj.criticalTime,
-        exclusionMethod=pcrtObj.exclusionMethod,
-        exclusionCriteria=pcrtObj.exclusionCriteria,
-    )
+    pcrtObj.name = videoName
+    pcrtObj.save(npzFilePath)
     LOGGER.info(f"pCRT object saved in {npzFilePath}.")
+
+
 # }}}
 
 
@@ -340,16 +324,106 @@ def singleVideoPipeline(
 
     LOGGER.setLevel(configDict["General"]["logLevel"])
     LOGGER.info(f"Config loaded from {configPath}.")
-    crtVideoPath = selectFile()
+    crtVideoPath = gui.selectFile()
     videoName = crtVideoPath.stem
     pcrtObj, roi = measureCRTVideoFromConfig(crtVideoPath, configDict)
+
+    LOGGER.log(NORM_LEVEL, f"{pcrtObj.plotTitle}: {pcrtObj}")
 
     plotPath = configDict["Files"]["plotPath"]
     csvPath = configDict["Files"]["csvPath"]
     npzPath = configDict["Files"]["npzPath"]
     overwrite = configDict["Files"]["overwrite"]
 
+    showPlots = configDict["General"]["showPlots"]
+    if showPlots:
+        pcrtObj.showAvgIntensPlot()
+        pcrtObj.showPCRTPlot()
+
     savePlots(pcrtObj, videoName, plotPath, overwrite)
     saveCSV(pcrtObj, videoName, csvPath, overwrite)
     saveNpz(pcrtObj, videoName, npzPath, overwrite)
+
+
+# }}}
+
+
+def multiVideoPipeline(
+    configPath: Path | str,
+    defaultsPath: Path | str,
+) -> list[PCRT]:
+    # {{{
+    configDict = loadConfigFile(configPath, defaultsPath)
+
+    LOGGER.setLevel(configDict["General"]["logLevel"])
+    LOGGER.info(f"Config loaded from {configPath}.")
+
+    askConfirmation = configDict["General"]["askConfirmation"]
+    # Just in case the user decides to read the videos out of order
+    processedPaths = []
+
+    plotPath = configDict["Files"]["plotPath"]
+    csvPath = configDict["Files"]["csvPath"]
+    npzPath = configDict["Files"]["npzPath"]
+    overwrite = configDict["Files"]["overwrite"]
+    showPlots = configDict["General"]["showPlots"]
+
+    dirPath = gui.selectDirectory()
+    for candidatePath in dirPath.iterdir():
+        if not candidatePath.is_file():
+            LOGGER.debug(
+                f"Skipping {candidatePath.stem}.{candidatePath.suffix} "
+                "(not a file)..."
+            )
+            continue
+        if candidatePath.suffix not in VIDEO_FORMATS:
+            LOGGER.debug(
+                f"Skipping {candidatePath.stem}.{candidatePath.suffix} "
+                "(not a video)..."
+            )
+            continue
+        if candidatePath in processedPaths:
+            LOGGER.debug(
+                f"Skipping {candidatePath.stem}.{candidatePath.suffix} "
+                "(already processed)..."
+            )
+            continue
+        if askConfirmation:
+            answer = gui.askNextVideo(candidatePath)
+            if answer == "skip":
+                processedPaths.append(candidatePath)
+                continue
+            elif answer == "abort":
+                break
+            elif answer == "select":
+                actualPath = gui.selectFile()
+            else:
+                actualPath = candidatePath
+        else:
+            actualPath = candidatePath
+
+        LOGGER.info(f"Processing video {actualPath}.")
+        
+        videoName = actualPath.stem
+        try:
+            pcrtObj, _ = measureCRTVideoFromConfig(actualPath, configDict)
+            processedPaths.append(actualPath)
+        except (RuntimeError, TypeError, ValueError):
+            LOGGER.error("CRT calculation failed on {actualPath}")
+            processedPaths.append(actualPath)
+            continue
+
+        LOGGER.log(NORM_LEVEL, f"{pcrtObj.plotTitle}: {pcrtObj}")
+
+        if showPlots:
+            pcrtObj.showAvgIntensPlot()
+            pcrtObj.showPCRTPlot()
+        savePlots(pcrtObj, videoName, plotPath, overwrite)
+        saveCSV(pcrtObj, videoName, csvPath, overwrite)
+        saveNpz(pcrtObj, videoName, npzPath, overwrite)
+
+    LOGGER.info(f"Finished processing videos in {dirPath}")
+            
+
+
 # }}}

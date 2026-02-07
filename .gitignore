@@ -1,6 +1,9 @@
 *.wmv
 *.csv
 *.png
+*.mp4
+*.npz
+clear_data.py
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
