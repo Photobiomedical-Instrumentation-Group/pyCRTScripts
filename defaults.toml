@@ -1,19 +1,17 @@
 [Files]
-
 plotPath = "Plots"
 csvPath = "results_sheet.csv"
 npzPath = "Npz"
+provideXLSX = true
 overwrite = false
 
 [Video]
-
 rescaleFactor = 1.0
-livePlot = true
+livePlot = false
 displayVideo = true
 playbackSpeed = "normal"
 
 [Measurement]
-
 sliceMethod = "from local max"
 fromTime = 0
 toTime = inf
@@ -24,5 +22,7 @@ initialGuesses = [1.0, -0.3, 0.0]
 roi = -1
 
 [General]
-
 logLevel = "INFO"
+showPlots = true
+askConfirmation = true
+writeLogFile = true

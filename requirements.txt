@@ -2,3 +2,4 @@ numpy>=2.0.0
 pandas
 pyCRT>=2.2.1
 tomli; python_version < "3.11"
+openpyxl

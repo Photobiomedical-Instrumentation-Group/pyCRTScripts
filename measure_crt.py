@@ -1,4 +1,16 @@
-#!/usr/bin/env python3
-from functions import singleVideoPipeline
+from functions import multiVideoPipeline, singleVideoPipeline
+from gui import (askSingleVideoOrDirectory, showDirSuccessMessage,
+                 showVideoErrorMessage, showVideoSuccessMessage)
 
-singleVideoPipeline("configuration.toml", "defaults.toml")
+answer = askSingleVideoOrDirectory()
+
+if answer == "directory":
+    failedMeasurements = multiVideoPipeline(
+        "configuration.toml", "defaults.toml"
+    )
+    showDirSuccessMessage(failedMeasurements)
+else:
+    if singleVideoPipeline("configuration.toml", "defaults.toml"):
+        showVideoSuccessMessage()
+    else:
+        showVideoErrorMessage()

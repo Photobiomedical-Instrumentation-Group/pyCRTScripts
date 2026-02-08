@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+from logging.handlers import RotatingFileHandler
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 import gui
@@ -13,7 +15,7 @@ try:
 except ModuleNotFoundError:
     import tomli  # fallback for older Python
 
-from pyCRT.simpleUI import DATETIME_FORMAT, PCRT, RoiTuple
+from pyCRT.simpleUI import DATETIME_FORMAT, DISPLAY_FORMAT, PCRT, RoiTuple
 
 PLAYBACK_FPS_SPEED = {
     "fast": np.inf,
@@ -26,23 +28,51 @@ logging.addLevelName(NORM_LEVEL, "NORM")
 VIDEO_FORMATS = (".mp4", ".wmv", ".avi", ".mov", ".mkv")
 
 
-def getLogger(name: str):
+def getLogger(name: str) -> logging.Logger:
     # {{{
     logger = logging.getLogger(name)
-    if not logger.handlers:  # prevent duplicate handlers
-        handler = logging.StreamHandler()
-        fmt = logging.Formatter("[%(levelname)s] %(message)s")
-        handler.setFormatter(fmt)
-        logger.addHandler(handler)
-        logger.setLevel(logging.INFO)
+    logger.setLevel(logging.INFO)
+    if logger.handlers:
+        return logger  # prevent duplicate handlers
+    fmt = logging.Formatter("[%(levelname)s] %(message)s")
+    stream_handler = logging.StreamHandler()
+    stream_handler.setFormatter(fmt)
+    logger.addHandler(stream_handler)
     return logger
-
-
-# }}}
+    # }}}
 
 LOGGER = getLogger("mauricio")
 
+def enableFileLogging(
+    logger: logging.Logger,
+    filename: str = "log.txt",
+    max_mb: int = 4,
+) -> None:
+    # Do nothing if file logging is already enabled
+    for h in logger.handlers:
+        if isinstance(h, RotatingFileHandler):
+            return
 
+    handler = RotatingFileHandler(
+        filename,
+        maxBytes=max_mb * 1024 * 1024,
+        backupCount=1,
+        encoding="utf-8",
+    )
+
+    formatter = logging.Formatter("[%(levelname)s] %(message)s")
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
+
+    # Mark start of this execution
+    separator = (
+        "\n"
+        + "=" * 80
+        + f"\nFile logging enabled at {datetime.now().strftime(DISPLAY_FORMAT)}\n"
+        + "=" * 80
+    )
+    handler.stream.write(separator + "\n")
+    handler.flush()
 
 def loadConfigFile(
     tomlPath, defaultsPath: Path | str = "defaults.toml"
@@ -212,6 +242,7 @@ def saveCSV(
     videoName: str,
     csvPath: Path | str,
     overwrite: bool = False,
+    provideXLSX: bool = True,
 ) -> None:
     # {{{
     colLabels = ["pCRT", "Unc", "RelUnc", "CT", "ExcCri", "ExcMet", "Time"]
@@ -250,7 +281,10 @@ def saveCSV(
         csvSheet = pd.DataFrame([row], index=[videoName], columns=colLabels)
 
     csvSheet.to_csv(csvPath, encoding="utf-8-sig")
-    LOGGER.info(f"Saved CRT in {csvPath}")
+    if provideXLSX:
+        xlsxPath = csvPath.with_suffix(".xlsx")
+        csvSheet.to_excel(xlsxPath, index=True, index_label="Name", engine="openpyxl")
+    LOGGER.info(f"Saved CRT in {csvPath}" + (f" and in {xlsxPath}" if provideXLSX else ""))
 
 
 # }}}
@@ -318,15 +352,23 @@ def stringToRoi(roiString: str) -> RoiTuple:
 def singleVideoPipeline(
     configPath: Path | str,
     defaultsPath: Path | str,
-) -> PCRT:
+) -> bool:
     # {{{
     configDict = loadConfigFile(configPath, defaultsPath)
 
     LOGGER.setLevel(configDict["General"]["logLevel"])
     LOGGER.info(f"Config loaded from {configPath}.")
+    if configDict["General"]["writeLogFile"]:
+        enableFileLogging(LOGGER)
+    
     crtVideoPath = gui.selectFile()
     videoName = crtVideoPath.stem
-    pcrtObj, roi = measureCRTVideoFromConfig(crtVideoPath, configDict)
+    
+    try:
+        pcrtObj, _ = measureCRTVideoFromConfig(crtVideoPath, configDict)
+    except RuntimeError as e:
+        LOGGER.error(f"CRT calculation failed on {crtVideoPath}:\n{e}")
+        return False
 
     LOGGER.log(NORM_LEVEL, f"{pcrtObj.plotTitle}: {pcrtObj}")
 
@@ -343,7 +385,7 @@ def singleVideoPipeline(
     savePlots(pcrtObj, videoName, plotPath, overwrite)
     saveCSV(pcrtObj, videoName, csvPath, overwrite)
     saveNpz(pcrtObj, videoName, npzPath, overwrite)
-
+    return True
 
 # }}}
 
@@ -351,16 +393,19 @@ def singleVideoPipeline(
 def multiVideoPipeline(
     configPath: Path | str,
     defaultsPath: Path | str,
-) -> list[PCRT]:
+) -> int:
     # {{{
     configDict = loadConfigFile(configPath, defaultsPath)
 
     LOGGER.setLevel(configDict["General"]["logLevel"])
     LOGGER.info(f"Config loaded from {configPath}.")
+    if configDict["General"]["writeLogFile"]:
+        enableFileLogging(LOGGER)
 
     askConfirmation = configDict["General"]["askConfirmation"]
     # Just in case the user decides to read the videos out of order
     processedPaths = []
+    failedMeasurements = 0
 
     plotPath = configDict["Files"]["plotPath"]
     csvPath = configDict["Files"]["csvPath"]
@@ -372,19 +417,19 @@ def multiVideoPipeline(
     for candidatePath in dirPath.iterdir():
         if not candidatePath.is_file():
             LOGGER.debug(
-                f"Skipping {candidatePath.stem}.{candidatePath.suffix} "
+                f"Skipping {candidatePath.stem}{candidatePath.suffix} "
                 "(not a file)..."
             )
             continue
         if candidatePath.suffix not in VIDEO_FORMATS:
             LOGGER.debug(
-                f"Skipping {candidatePath.stem}.{candidatePath.suffix} "
+                f"Skipping {candidatePath.stem}{candidatePath.suffix} "
                 "(not a video)..."
             )
             continue
         if candidatePath in processedPaths:
             LOGGER.debug(
-                f"Skipping {candidatePath.stem}.{candidatePath.suffix} "
+                f"Skipping {candidatePath.stem}{candidatePath.suffix} "
                 "(already processed)..."
             )
             continue
@@ -408,8 +453,9 @@ def multiVideoPipeline(
         try:
             pcrtObj, _ = measureCRTVideoFromConfig(actualPath, configDict)
             processedPaths.append(actualPath)
-        except (RuntimeError, TypeError, ValueError):
-            LOGGER.error("CRT calculation failed on {actualPath}")
+        except RuntimeError as e:
+            LOGGER.error(f"CRT calculation failed on {actualPath}:\n{e}")
+            failedMeasurements += 1
             processedPaths.append(actualPath)
             continue
 
@@ -424,6 +470,6 @@ def multiVideoPipeline(
 
     LOGGER.info(f"Finished processing videos in {dirPath}")
             
-
+    return failedMeasurements
 
 # }}}

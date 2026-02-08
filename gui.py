@@ -1,7 +1,64 @@
 import tkinter as tk
 from pathlib import Path
-from tkinter import filedialog, ttk
+from tkinter import filedialog, ttk, messagebox
 
+def askSingleVideoOrDirectory() -> str:
+    """
+    Opens a modal dialog asking:
+    "Measure CRT on a single video or a directory?"
+
+    Returns
+    -------
+    str
+        Either "single video" or "directory".
+    """
+    result: str | None = None
+
+    root = tk.Tk()
+    root.withdraw()  # hide main window
+
+    dialog = tk.Toplevel(root)
+    dialog.title("Select input type")
+    dialog.resizable(False, False)
+    dialog.attributes("-topmost", True)
+    dialog.grab_set()  # modal
+
+    ttk.Label(
+        dialog,
+        text="Measure CRT on a single video or a directory?",
+        padding=(20, 15),
+    ).pack()
+
+    btn_frame = ttk.Frame(dialog, padding=(10, 10))
+    btn_frame.pack()
+
+    def choose(value: str) -> None:
+        nonlocal result
+        result = value
+        dialog.destroy()
+
+    ttk.Button(
+        btn_frame,
+        text="Single video",
+        command=lambda: choose("single video"),
+        width=18,
+    ).grid(row=0, column=0, padx=5)
+
+    ttk.Button(
+        btn_frame,
+        text="Directory",
+        command=lambda: choose("directory"),
+        width=18,
+    ).grid(row=0, column=1, padx=5)
+
+    dialog.protocol("WM_DELETE_WINDOW", lambda: None)  # disable close
+    root.wait_window(dialog)
+    root.destroy()
+
+    if result is None:
+        raise RuntimeError("Dialog closed without a selection.")
+
+    return result
 
 def askNextVideo(videoName: str) -> str:
     # {{{
@@ -78,7 +135,6 @@ def selectFile() -> Path:
     root.destroy()
     return filePath
 
-
 # }}}
 
 
@@ -95,4 +151,75 @@ def selectDirectory() -> Path:
     return dirPath
 
 
+# }}}
+
+def showVideoSuccessMessage() -> None:
+    # {{{
+    root = tk.Tk()
+    root.withdraw()  # hide main window
+    root.attributes("-topmost", True)
+
+    messagebox.showinfo(
+        title="Success",
+        message=(
+            "CRT measured successfully.\n\n"
+            "Check the console and/or the plots directory and the spreadsheet "
+            "for the results."
+        )
+    )
+
+    root.destroy()
+    
+# }}}
+
+
+def showDirSuccessMessage(failedMeasurements) -> None:
+    # {{{
+    root = tk.Tk()
+    root.withdraw()  # hide main window
+    root.attributes("-topmost", True)
+
+    if failedMeasurements > 0:
+        messagebox.showinfo(
+            title="Success",
+            message=(
+                "Finished processing directory.\n\n"
+                f"Measurement failed on {failedMeasurements} videos.\n"
+                "Check the console and/or logs, plots directory, "
+                "and spreadsheets for results"
+            ),
+        )
+    else:
+        messagebox.showinfo(
+            title="Success",
+            message=(
+                "Finished processing directory.\n\n"
+                "Measurement successfull on all videos.\n"
+                "Check the console and/or logs, plots directory, "
+                "and spreadsheets for results"
+            ),
+        )
+
+    root.destroy()
+    
+ # }}}
+ 
+def showVideoErrorMessage() -> None:
+    # {{{
+    root = tk.Tk()
+    root.withdraw()  # hide main window
+    root.attributes("-topmost", True)
+
+    messagebox.showinfo(
+        title="Error",
+        message=(
+            "CRT measured failed.\n\n"
+            "Check the console for details.\n"
+            "Try changing the ROi, exclusionMethod, and/or exclusionCriteria "
+            "and try again."
+        )
+    )
+
+    root.destroy()
+    
 # }}}
