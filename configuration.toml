@@ -12,17 +12,17 @@ displayVideo = true
 playbackSpeed = "fast"
 
 [Measurement]
-sliceMethod = "from local max"
+roi = -1
+channel = "g"
 fromTime = 0
 toTime = inf
-exclusionCriteria = inf
+sliceMethod = "from local max"
 exclusionMethod = "first positive peak"
-channel = "g"
-initialGuesses = [1.0, -0.3, 0.0]
-roi = -1
+exclusionCriteria = inf
+initialGuesses = [1.0, -0.5, 0.0]
 
 [General]
-logLevel = "DEBUG"
-showPlots = true
 askConfirmation = true
+showPlots = true
 writeLogFile = true
+logLevel = "DEBUG"

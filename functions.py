@@ -48,6 +48,7 @@ def enableFileLogging(
     filename: str = "log.txt",
     max_mb: int = 4,
 ) -> None:
+# {{{
     # Do nothing if file logging is already enabled
     for h in logger.handlers:
         if isinstance(h, RotatingFileHandler):
@@ -73,6 +74,8 @@ def enableFileLogging(
     )
     handler.stream.write(separator + "\n")
     handler.flush()
+# }}}
+
 
 def loadConfigFile(
     tomlPath, defaultsPath: Path | str = "defaults.toml"
