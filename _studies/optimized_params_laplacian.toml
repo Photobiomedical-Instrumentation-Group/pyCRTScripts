@@ -1,0 +1,346 @@
+[run]
+seed = 988
+validation_metric = "weighted_rmse_s"
+restarts = 20
+trials_per_restart = 100
+validation_video_count = 50
+validation_max_raquel_masters = 33
+optimization_video_count = 66
+optimization_max_raquel_masters = 44
+cache_dir = "Npz\\Cache"
+trial_timeout_seconds = 300
+
+[best]
+restart = 1
+validation_weighted_rmse_s = 0.15490409190492302
+all_weighted_rmse_s = 2.2720584748552133
+
+[params]
+scale = 1
+delta = 0
+ksize = 3
+blurKernel = 8
+laplacianPlateau = 1.7953339084618558
+laplacianSmoothingKernel = 17
+laplacianGradientSmoothingKernel = 5
+indexOffset = -2
+
+[performance.validation]
+video_count = 50
+failure_count = 0
+success_rate = 1.0
+mae_s = 0.09774533333333332
+rmse_s = 0.14034477578053572
+max_abs_error_s = 0.5439999999999969
+weighted_mae_s = 0.118904
+weighted_rmse_s = 0.15490409190492302
+weighted_max_abs_error_s = 0.5439999999999969
+mae_frames = 2.48
+rmse_frames = 3.5327043465311387
+max_abs_error_frames = 13.0
+
+[performance.all]
+video_count = 191
+failure_count = 0
+success_rate = 1.0
+mae_s = 0.3672992437463642
+rmse_s = 1.8658859949341486
+max_abs_error_s = 19.503000000000004
+weighted_mae_s = 0.4889300756253637
+weighted_rmse_s = 2.2720584748552133
+weighted_max_abs_error_s = 19.503000000000004
+mae_frames = 8.900523560209423
+rmse_frames = 44.599204087467776
+max_abs_error_frames = 466.0
+
+[performance.datasets.other]
+video_count = 39
+failure_count = 0
+success_rate = 1.0
+mae_s = 0.08613219373219372
+rmse_s = 0.1230006570189655
+max_abs_error_s = 0.5
+weighted_mae_s = 0.13309344729344721
+weighted_rmse_s = 0.15958360993432483
+weighted_max_abs_error_s = 0.5
+mae_frames = 2.6666666666666665
+rmse_frames = 3.7825510317366913
+max_abs_error_frames = 15.0
+
+[performance.datasets.raquelMasters]
+video_count = 152
+failure_count = 0
+success_rate = 1.0
+mae_s = 0.4394407894736843
+rmse_s = 2.090678398145847
+max_abs_error_s = 19.503000000000004
+weighted_mae_s = 0.5802302631578948
+weighted_rmse_s = 2.5456315587481892
+weighted_max_abs_error_s = 19.503000000000004
+mae_frames = 10.5
+rmse_frames = 49.957745303300804
+max_abs_error_frames = 466.0
+
+[selection.validation]
+videos = [
+  "P27CR1.wmv",
+  "P12CR5.wmv",
+  "experiment 3.mp4",
+  "P06CR4.wmv",
+  "P04CR4.wmv",
+  "0528_test4.5.mp4",
+  "P19CR1.wmv",
+  "0528_test2.1.mp4",
+  "P15CR4.wmv",
+  "P19CR3.wmv",
+  "0528_test4.4.mp4",
+  "P06CR2.wmv",
+  "0528_test3.2.mp4",
+  "0528_test3.4.mp4",
+  "Video 151.mp4",
+  "P05CR4.wmv",
+  "P31CR4.wmv",
+  "0528_test2.2.mp4",
+  "P02CR5.wmv",
+  "P20CR3.wmv",
+  "Video 142.mp4",
+  "P26CR1.wmv",
+  "Video 157.mp4",
+  "P06CR5.wmv",
+  "P01CR5.wmv",
+  "P31CR1.wmv",
+  "0528_test1.5.mp4",
+  "P26CR5.wmv",
+  "0528_test1.6.mp4",
+  "0528_test2.4.mp4",
+  "P19CR4.wmv",
+  "CRT1.mp4",
+  "P13CR4.wmv",
+  "P28CR5.wmv",
+  "P03CR3.wmv",
+  "P23CR3.wmv",
+  "P30CR4.wmv",
+  "P16CR1.wmv",
+  "P31CR2.wmv",
+  "experiment 4.wmv",
+  "P01CR3.wmv",
+  "P30CR2.wmv",
+  "CRT3.mp4",
+  "P25CR1.wmv",
+  "P17CR5.wmv",
+  "P15CR3.wmv",
+  "Video 154.mp4",
+  "P03CR1.wmv",
+  "P07CR4.wmv",
+  "P17CR3.wmv",
+]
+
+[selection.best_optimization]
+videos = [
+  "P20CR4.wmv",
+  "P11CR2.wmv",
+  "video.mp4",
+  "P11CR4.wmv",
+  "P24CR5.wmv",
+  "P08CR4.wmv",
+  "0528_test4.3.mp4",
+  "P18CR4.wmv",
+  "P16CR2.wmv",
+  "0528_test1.4.mp4",
+  "P31CR3.wmv",
+  "0528_test3.3.mp4",
+  "Video 148.mp4",
+  "P05CR2.wmv",
+  "P24CR1.wmv",
+  "0528_test4.1.mp4",
+  "P06CR1.wmv",
+  "P13CR1.wmv",
+  "P03CR4.wmv",
+  "P04CR3.wmv",
+  "P04CR1.wmv",
+  "0528_test3.5.mp4",
+  "P27CR2.wmv",
+  "P21CR3.wmv",
+  "0528_test1.3.mp4",
+  "experiment 1.wmv",
+  "0528_test4.2.mp4",
+  "P25CR2.wmv",
+  "P09CR5.wmv",
+  "P23CR4.wmv",
+  "DSC_0069.MOV",
+  "P07CR1.wmv",
+  "0528_test1.2.mp4",
+  "P24CR4.wmv",
+  "0528_test1.1.mp4",
+  "P11CR3.wmv",
+  "P10CR2.wmv",
+  "P25CR4.wmv",
+  "P04CR2.wmv",
+  "0528_test3.6.mp4",
+  "P09CR1.wmv",
+  "P12CR1.wmv",
+  "CRT2.mp4",
+  "P07CR2.wmv",
+  "P18CR1.wmv",
+  "P11CR5.wmv",
+  "P28CR4.wmv",
+  "0528_test2.3.mp4",
+  "P22CR5.wmv",
+  "P12CR2.wmv",
+  "experiment 2.wmv",
+  "P29CR5.wmv",
+  "P11CR1.wmv",
+  "P03CR5.wmv",
+  "P01CR2.wmv",
+  "0528_test3.1.mp4",
+  "P17CR2.wmv",
+  "P26CR3.wmv",
+  "P08CR1.wmv",
+  "0528_test2.5.mp4",
+  "P09CR4.wmv",
+  "Video 145.mp4",
+  "P27CR3.wmv",
+  "v1.mp4",
+  "P02CR4.wmv",
+  "0528_test4.6.mp4",
+]
+
+[[restarts_summary]]
+restart = 1
+best_trial = 84
+optimization_weighted_rmse_s = 0.1376686475047923
+validation_weighted_rmse_s = 0.15490409190492302
+validation_success_rate = 1.0
+
+[[restarts_summary]]
+restart = 2
+best_trial = 54
+optimization_weighted_rmse_s = 0.21999632480966738
+validation_weighted_rmse_s = 2.158722277006574
+validation_success_rate = 1.0
+
+[[restarts_summary]]
+restart = 3
+best_trial = 80
+optimization_weighted_rmse_s = 0.15592626095439716
+validation_weighted_rmse_s = 1.7815542034976086
+validation_success_rate = 1.0
+
+[[restarts_summary]]
+restart = 4
+best_trial = 71
+optimization_weighted_rmse_s = 0.2732279796996627
+validation_weighted_rmse_s = 1.6372808953397233
+validation_success_rate = 1.0
+
+[[restarts_summary]]
+restart = 5
+best_trial = 56
+optimization_weighted_rmse_s = 0.23029941384388067
+validation_weighted_rmse_s = 0.34433984908323734
+validation_success_rate = 1.0
+
+[[restarts_summary]]
+restart = 6
+best_trial = 94
+optimization_weighted_rmse_s = 0.11452327483469296
+validation_weighted_rmse_s = 1.451882257209585
+validation_success_rate = 1.0
+
+[[restarts_summary]]
+restart = 7
+best_trial = 86
+optimization_weighted_rmse_s = 0.13154876023974388
+validation_weighted_rmse_s = 1.4695739420057177
+validation_success_rate = 1.0
+
+[[restarts_summary]]
+restart = 8
+best_trial = 95
+optimization_weighted_rmse_s = 0.29718198706237814
+validation_weighted_rmse_s = 2.68743824952314
+validation_success_rate = 1.0
+
+[[restarts_summary]]
+restart = 9
+best_trial = 76
+optimization_weighted_rmse_s = 0.15513849837327903
+validation_weighted_rmse_s = 2.4747441286188225
+validation_success_rate = 1.0
+
+[[restarts_summary]]
+restart = 10
+best_trial = 99
+optimization_weighted_rmse_s = 0.17552476515776536
+validation_weighted_rmse_s = 2.1321548067415534
+validation_success_rate = 1.0
+
+[[restarts_summary]]
+restart = 11
+best_trial = 73
+optimization_weighted_rmse_s = 1.1070817425012442
+validation_weighted_rmse_s = 1.4463315051459609
+validation_success_rate = 1.0
+
+[[restarts_summary]]
+restart = 12
+best_trial = 26
+optimization_weighted_rmse_s = 0.23787000467603986
+validation_weighted_rmse_s = 1.5182840591785045
+validation_success_rate = 1.0
+
+[[restarts_summary]]
+restart = 13
+best_trial = 89
+optimization_weighted_rmse_s = 0.16096616273677758
+validation_weighted_rmse_s = 1.7095917911985112
+validation_success_rate = 1.0
+
+[[restarts_summary]]
+restart = 14
+best_trial = 95
+optimization_weighted_rmse_s = 0.39536695733057947
+validation_weighted_rmse_s = 0.4288690897128296
+validation_success_rate = 1.0
+
+[[restarts_summary]]
+restart = 15
+best_trial = 96
+optimization_weighted_rmse_s = 0.3656422628489671
+validation_weighted_rmse_s = 1.766271114812848
+validation_success_rate = 1.0
+
+[[restarts_summary]]
+restart = 16
+best_trial = 69
+optimization_weighted_rmse_s = 0.1539897771858258
+validation_weighted_rmse_s = 0.20033683857166398
+validation_success_rate = 1.0
+
+[[restarts_summary]]
+restart = 17
+best_trial = 77
+optimization_weighted_rmse_s = 0.17483051477465508
+validation_weighted_rmse_s = 2.029228394658643
+validation_success_rate = 1.0
+
+[[restarts_summary]]
+restart = 18
+best_trial = 98
+optimization_weighted_rmse_s = 0.2733547948925706
+validation_weighted_rmse_s = 0.6429184227670989
+validation_success_rate = 1.0
+
+[[restarts_summary]]
+restart = 19
+best_trial = 99
+optimization_weighted_rmse_s = 0.17147082909914785
+validation_weighted_rmse_s = 0.32781467260904873
+validation_success_rate = 1.0
+
+[[restarts_summary]]
+restart = 20
+best_trial = 54
+optimization_weighted_rmse_s = 0.23494293970599633
+validation_weighted_rmse_s = 2.188773024200241
+validation_success_rate = 1.0

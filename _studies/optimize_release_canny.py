@@ -1,6 +1,9 @@
 import argparse
 import json
+import multiprocessing as mp
+import queue
 import os
+import time
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
@@ -26,11 +29,10 @@ VIDEO_EXTENSIONS_LOWER = {suffix.lower() for suffix in VIDEO_EXTENSIONS}
 # Top-level knobs for quick experimentation.
 N_RESTARTS = 20
 N_TRIALS_PER_RESTART = 100
-VALIDATION_VIDEO_COUNT = 50
-VALIDATION_MAX_RAQUEL_MASTERS = 33
-OPTIMIZATION_VIDEO_COUNT = 66
-OPTIMIZATION_MAX_RAQUEL_MASTERS = 44
+VALIDATION_VIDEO_RATIO = 50 / 191
+OPTIMIZATION_VIDEO_RATIO = 66 / 191
 OPTUNA_TIMEOUT = None
+TRIAL_TIMEOUT_SECONDS = 5 * 60
 OPTUNA_SEED = 998
 SHOW_PROGRESS_BAR = True
 VALIDATION_METRIC = "weighted_rmse_s"
@@ -436,13 +438,164 @@ def randomParams(rng):
     }
 
 
+def failedTrialMetrics(params, videoCount, exception):
+    failureResult = {
+        "video": "<trial>",
+        "dataset": "",
+        "target": None,
+        "target_time_s": None,
+        "predicted": None,
+        "predicted_time_s": None,
+        "frame_error": None,
+        "time_error_s": None,
+        "weighted_time_error_s": None,
+        "exception": exception,
+    }
+    return {
+        "params": params,
+        "video_count": int(videoCount),
+        "failure_count": int(videoCount),
+        "success_rate": 0.0,
+        "mae_s": LARGE_PENALTY,
+        "rmse_s": LARGE_PENALTY,
+        "max_abs_error_s": LARGE_PENALTY,
+        "weighted_mae_s": LARGE_PENALTY,
+        "weighted_rmse_s": LARGE_PENALTY,
+        "weighted_max_abs_error_s": LARGE_PENALTY,
+        "mae_frames": LARGE_PENALTY,
+        "rmse_frames": LARGE_PENALTY,
+        "max_abs_error_frames": LARGE_PENALTY,
+        "results": [failureResult],
+    }
+
+
+def evaluateParamsWorker(cache, requestQueue, responseQueue):
+    while True:
+        payload = requestQueue.get()
+        if payload is None:
+            return
+
+        trialNumber, params, verbose = payload
+        try:
+            metrics = evaluateParams(params, cache, verbose=verbose)
+        except BaseException as err:
+            responseQueue.put(
+                (
+                    trialNumber,
+                    False,
+                    f"{type(err).__name__}: {err}",
+                )
+            )
+        else:
+            responseQueue.put((trialNumber, True, metrics))
+
+
+class TimedTrialEvaluator:
+    def __init__(self, cache, timeoutSeconds):
+        self.cache = cache
+        self.timeoutSeconds = timeoutSeconds
+        self.context = mp.get_context("spawn")
+        self.requestQueue = None
+        self.responseQueue = None
+        self.process = None
+        self.startWorker()
+
+    def startWorker(self):
+        self.requestQueue = self.context.Queue()
+        self.responseQueue = self.context.Queue()
+        self.process = self.context.Process(
+            target=evaluateParamsWorker,
+            args=(self.cache, self.requestQueue, self.responseQueue),
+        )
+        self.process.daemon = True
+        self.process.start()
+
+    def closeQueues(self):
+        for queueObj in (self.requestQueue, self.responseQueue):
+            if queueObj is None:
+                continue
+            queueObj.close()
+            queueObj.join_thread()
+        self.requestQueue = None
+        self.responseQueue = None
+
+    def close(self):
+        if self.process is not None and self.process.is_alive():
+            try:
+                self.requestQueue.put(None)
+            except Exception:
+                pass
+            self.process.join(timeout=2)
+            if self.process.is_alive():
+                self.process.terminate()
+                self.process.join(timeout=2)
+        self.process = None
+        self.closeQueues()
+
+    def restartWorker(self):
+        if self.process is not None and self.process.is_alive():
+            self.process.terminate()
+            self.process.join(timeout=2)
+        self.process = None
+        self.closeQueues()
+        self.startWorker()
+
+    def evaluate(self, params, trialNumber, verbose=False):
+        if self.process is None or not self.process.is_alive():
+            self.restartWorker()
+
+        self.requestQueue.put((trialNumber, params, verbose))
+        deadline = time.monotonic() + self.timeoutSeconds
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                print(
+                    f"trial={trialNumber} timed out after "
+                    f"{self.timeoutSeconds:.0f} seconds; assigning penalty",
+                    flush=True,
+                )
+                self.restartWorker()
+                return failedTrialMetrics(
+                    params,
+                    len(self.cache),
+                    f"TimeoutError: trial exceeded {self.timeoutSeconds:.0f} seconds",
+                )
+
+            try:
+                responseTrialNumber, ok, payload = self.responseQueue.get(
+                    timeout=min(1.0, remaining)
+                )
+            except queue.Empty:
+                if self.process is not None and not self.process.is_alive():
+                    exitCode = self.process.exitcode
+                    self.restartWorker()
+                    return failedTrialMetrics(
+                        params,
+                        len(self.cache),
+                        f"WorkerExitError: trial worker exited with code {exitCode}",
+                    )
+                continue
+
+            if responseTrialNumber != trialNumber:
+                return failedTrialMetrics(
+                    params,
+                    len(self.cache),
+                    f"WorkerProtocolError: expected trial {trialNumber}, "
+                    f"got {responseTrialNumber}",
+                )
+            if not ok:
+                return failedTrialMetrics(params, len(self.cache), payload)
+            return payload
+
+
 def makeObjective(cache, restartIndex, verbose=False):
     bestValue = np.inf
+    evaluator = TimedTrialEvaluator(cache, TRIAL_TIMEOUT_SECONDS)
 
     def objective(trial):
         nonlocal bestValue
         params = suggestParams(trial)
-        metrics = evaluateParams(params, cache, verbose=verbose)
+        metrics = evaluator.evaluate(params, trial.number, verbose=verbose)
         value = metrics[VALIDATION_METRIC]
 
         trial.set_user_attr("mae_s", metrics["mae_s"])
@@ -475,99 +628,58 @@ def makeObjective(cache, restartIndex, verbose=False):
 
         return value
 
+    objective.close = evaluator.close
     return objective
 
 
-def selectConstrainedRandomSubset(
-    candidates,
-    count,
-    cappedDatasetName,
-    maxFromCappedDataset,
-    rng,
-):
-    candidates = list(candidates)
-    cappedCandidates = [
-        candidate
-        for candidate in candidates
-        if candidate.datasetName == cappedDatasetName
-    ]
-    otherCandidates = [
-        candidate
-        for candidate in candidates
-        if candidate.datasetName != cappedDatasetName
-    ]
+def validateVideoRatio(name, ratio):
+    if not 0 < ratio < 1:
+        raise ValueError(f"{name} must be between 0 and 1. Got {ratio}.")
 
-    maxSelectable = len(otherCandidates) + min(len(cappedCandidates), maxFromCappedDataset)
-    if count > maxSelectable:
+
+def videoCountFromRatio(videoCount, ratio):
+    if videoCount <= 0:
+        return 0
+    return max(1, int(round(videoCount * ratio)))
+
+
+def splitVideoCounts(targetVideos):
+    totalCount = len(targetVideos)
+    validationCount = videoCountFromRatio(totalCount, VALIDATION_VIDEO_RATIO)
+    optimizationCount = videoCountFromRatio(totalCount, OPTIMIZATION_VIDEO_RATIO)
+    return validationCount, optimizationCount
+
+
+def selectRandomSubset(candidates, count, rng):
+    candidates = list(candidates)
+    if count > len(candidates):
         raise ValueError(
-            f"Cannot select {count} videos with at most {maxFromCappedDataset} "
-            f"from {cappedDatasetName}. Available: "
-            f"{len(otherCandidates)} non-capped and {len(cappedCandidates)} capped."
+            f"Cannot select {count} videos from {len(candidates)} candidates."
         )
 
     shuffled = list(candidates)
     rng.shuffle(shuffled)
-    selected = []
-    cappedCount = 0
-    for candidate in shuffled:
-        if candidate.datasetName == cappedDatasetName:
-            if cappedCount >= maxFromCappedDataset:
-                continue
-            cappedCount += 1
-        selected.append(candidate)
-        if len(selected) == count:
-            break
-
-    if len(selected) != count:
-        raise RuntimeError(
-            f"Internal selection error: selected {len(selected)} of {count} videos."
-        )
-
+    selected = shuffled[:count]
     rng.shuffle(selected)
     return selected
 
 
-def minimumNonRaquelCount(videoCount, maxRaquelCount):
-    return max(0, videoCount - maxRaquelCount)
-
-
 def validateSplitFeasibility(targetVideos):
-    nonRaquelCount = sum(
-        targetVideo.datasetName != RAQUEL_MASTERS_DATASET
-        for targetVideo in targetVideos
-    )
-    minNonRaquelNeeded = minimumNonRaquelCount(
-        VALIDATION_VIDEO_COUNT,
-        VALIDATION_MAX_RAQUEL_MASTERS,
-    ) + minimumNonRaquelCount(
-        OPTIMIZATION_VIDEO_COUNT,
-        OPTIMIZATION_MAX_RAQUEL_MASTERS,
-    )
-    if len(targetVideos) < VALIDATION_VIDEO_COUNT + OPTIMIZATION_VIDEO_COUNT:
+    validateVideoRatio("VALIDATION_VIDEO_RATIO", VALIDATION_VIDEO_RATIO)
+    validateVideoRatio("OPTIMIZATION_VIDEO_RATIO", OPTIMIZATION_VIDEO_RATIO)
+    validationCount, optimizationCount = splitVideoCounts(targetVideos)
+    requiredCount = validationCount + optimizationCount
+    if len(targetVideos) < requiredCount:
         raise ValueError(
-            f"Requested split is infeasible: need "
-            f"{VALIDATION_VIDEO_COUNT + OPTIMIZATION_VIDEO_COUNT} usable target "
-            f"videos, found {len(targetVideos)}."
-        )
-    if nonRaquelCount < minNonRaquelNeeded:
-        raise ValueError(
-            f"Requested split is infeasible: validation and optimization sets are "
-            f"disjoint and require at least {minNonRaquelNeeded} non-"
-            f"{RAQUEL_MASTERS_DATASET} videos under the current caps, but only "
-            f"{nonRaquelCount} were found. Add non-{RAQUEL_MASTERS_DATASET} "
-            f"targets or relax VALIDATION_MAX_RAQUEL_MASTERS / "
-            f"OPTIMIZATION_MAX_RAQUEL_MASTERS."
+            f"Requested split is infeasible: ratios select {requiredCount} usable "
+            f"target videos ({validationCount} validation, {optimizationCount} "
+            f"optimization), but only {len(targetVideos)} were found."
         )
 
 
 def selectValidationSet(targetVideos, rng):
-    return selectConstrainedRandomSubset(
-        targetVideos,
-        VALIDATION_VIDEO_COUNT,
-        RAQUEL_MASTERS_DATASET,
-        VALIDATION_MAX_RAQUEL_MASTERS,
-        rng,
-    )
+    validationCount, _ = splitVideoCounts(targetVideos)
+    return selectRandomSubset(targetVideos, validationCount, rng)
 
 
 def selectOptimizationSet(targetVideos, validationSet, rng):
@@ -577,13 +689,8 @@ def selectOptimizationSet(targetVideos, validationSet, rng):
         for targetVideo in targetVideos
         if targetVideo.videoPath.name not in validationNames
     ]
-    return selectConstrainedRandomSubset(
-        candidates,
-        OPTIMIZATION_VIDEO_COUNT,
-        RAQUEL_MASTERS_DATASET,
-        OPTIMIZATION_MAX_RAQUEL_MASTERS,
-        rng,
-    )
+    _, optimizationCount = splitVideoCounts(targetVideos)
+    return selectRandomSubset(candidates, optimizationCount, rng)
 
 
 def runRestart(restartIndex, targetVideos, validationSet, validationCache, rng, args):
@@ -603,12 +710,16 @@ def runRestart(restartIndex, targetVideos, validationSet, validationCache, rng, 
     sampler = optuna.samplers.TPESampler(seed=samplerSeed)
     study = optuna.create_study(direction="minimize", sampler=sampler)
     study.enqueue_trial(initialParams)
-    study.optimize(
-        makeObjective(optimizationCache, restartIndex, verbose=args.verbose),
-        n_trials=args.n_trials,
-        timeout=args.timeout,
-        show_progress_bar=not args.no_progress_bar and SHOW_PROGRESS_BAR,
-    )
+    objective = makeObjective(optimizationCache, restartIndex, verbose=args.verbose)
+    try:
+        study.optimize(
+            objective,
+            n_trials=args.n_trials,
+            timeout=args.timeout,
+            show_progress_bar=not args.no_progress_bar and SHOW_PROGRESS_BAR,
+        )
+    finally:
+        objective.close()
 
     bestParams = dict(study.best_trial.params)
     optimizationMetrics = evaluateParams(bestParams, optimizationCache, verbose=False)
@@ -762,16 +873,10 @@ def writeOptimizedParamsToml(
     lines.append(f"validation_metric = {tomlValue(VALIDATION_METRIC)}")
     lines.append(f"restarts = {tomlValue(len(restartRecords))}")
     lines.append(f"trials_per_restart = {tomlValue(N_TRIALS_PER_RESTART)}")
-    lines.append(f"validation_video_count = {tomlValue(VALIDATION_VIDEO_COUNT)}")
-    lines.append(
-        f"validation_max_raquel_masters = {tomlValue(VALIDATION_MAX_RAQUEL_MASTERS)}"
-    )
-    lines.append(f"optimization_video_count = {tomlValue(OPTIMIZATION_VIDEO_COUNT)}")
-    lines.append(
-        f"optimization_max_raquel_masters = "
-        f"{tomlValue(OPTIMIZATION_MAX_RAQUEL_MASTERS)}"
-    )
+    lines.append(f"validation_video_ratio = {tomlValue(VALIDATION_VIDEO_RATIO)}")
+    lines.append(f"optimization_video_ratio = {tomlValue(OPTIMIZATION_VIDEO_RATIO)}")
     lines.append(f"cache_dir = {tomlValue(CACHE_DIR)}")
+    lines.append(f"trial_timeout_seconds = {tomlValue(TRIAL_TIMEOUT_SECONDS)}")
 
     appendSection(lines, "best")
     lines.append(f"restart = {tomlValue(bestRecord['restart'])}")
@@ -867,6 +972,7 @@ def parseArgs():
 
 
 def main():
+    mp.freeze_support()
     global N_RESTARTS
     global N_TRIALS_PER_RESTART
 
