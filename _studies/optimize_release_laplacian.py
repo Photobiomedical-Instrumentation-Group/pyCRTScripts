@@ -1,8 +1,8 @@
 import argparse
 import json
 import multiprocessing as mp
-import queue
 import os
+import queue
 import time
 from collections import defaultdict
 from dataclasses import dataclass

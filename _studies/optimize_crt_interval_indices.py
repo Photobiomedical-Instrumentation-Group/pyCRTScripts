@@ -14,12 +14,13 @@ os.environ.setdefault("MPLCONFIGDIR", "/tmp/matplotlib")
 
 import numpy as np
 import optuna
-from release_frame_processing import cannySumsFromLFrames, findReleaseIndex
+from release_frame_processing import optimizableFindCrtIntervalIndices
 
-ROIS_PATH = "rois_full.toml"
-CACHE_DIR = Path("Npz/Cache")
-TARGETS_PATH = Path("target_frames.toml")
-OUTPUT_PATH = Path("optimized_params_canny.toml")
+SCRIPT_DIR = Path(__file__).resolve().parent
+CACHE_DIR = SCRIPT_DIR / "Npz/Cache"
+RELEASE_TARGETS_PATH = SCRIPT_DIR / "target_frames.toml"
+INTERVAL_TARGETS_PATH = SCRIPT_DIR / "crt_interval_targets.toml"
+OUTPUT_PATH = SCRIPT_DIR / "optimized_params_crt_interval.toml"
 
 RAQUEL_MASTERS_DATASET = "raquelMasters"
 OTHER_DATASET = "other"
@@ -27,73 +28,94 @@ VIDEO_EXTENSIONS = [".MOV", ".wmv", ".mp4"]
 VIDEO_EXTENSIONS_LOWER = {suffix.lower() for suffix in VIDEO_EXTENSIONS}
 
 # Top-level knobs for quick experimentation.
-N_RESTARTS = 20
-N_TRIALS_PER_RESTART = 100
+N_REPEATS = 20
+N_TRIALS_PER_REPEAT = 100
 VALIDATION_VIDEO_RATIO = 50 / 191
 OPTIMIZATION_VIDEO_RATIO = 66 / 191
 OPTUNA_TIMEOUT = None
 TRIAL_TIMEOUT_SECONDS = 5 * 60
-OPTUNA_SEED = 998
+OPTUNA_SEED = 1009
 SHOW_PROGRESS_BAR = True
-VALIDATION_METRIC = "weighted_rmse_s"
+VALIDATION_METRIC = "endpoint_rmse_s"
 
-THRESH1_MIN = 1
-THRESH1_MAX = 80
-THRESH2_MAX = 160
-BLUR_KERNEL_MIN = 0
-BLUR_KERNEL_MAX = 8
-CANNY_PLATEAU_MIN = 0.1
-CANNY_PLATEAU_MAX = 20.0
-CANNY_SMOOTHING_KERNEL_CHOICES = [1, 3, 5, 7, 9, 11, 13, 15, 17, 19, 21]
-CANNY_GRADIENT_SMOOTHING_KERNEL_CHOICES = [1, 3, 5]
-INDEX_OFFSET_MIN = -5
-INDEX_OFFSET_MAX = 5
+STRICT_MIN_GRAD_MIN = -2.0
+STRICT_MIN_GRAD_MAX = 0.5
+STRICT_MAX_GRAD_MIN = -0.5
+STRICT_MAX_GRAD_MAX = 2.0
+RELAX_MIN_GRAD_MIN = -10.0
+RELAX_MIN_GRAD_MAX = 0.5
+RELAX_MAX_GRAD_MIN = -0.5
+RELAX_MAX_GRAD_MAX = 10.0
+OFFSET_TIME_MIN = -0.5
+OFFSET_TIME_MAX = 0.5
+MIN_GRAD_SPAN = 1e-6
 
 DEFAULT_PARAMS = {
-    "thresh1": 56,
-    "thresh2": 85,
-    "blurKernel": 6,
-    "l2grad": False,
-    "cannyPlateau": 0.10004182314239024,
-    "cannySmoothingKernel": 9,
-    "cannyGradientSmoothingKernel": 1,
-    "indexOffset": 0,
+    "strictMinGrad": -0.5,
+    "strictMaxGrad": 1.0,
+    "relaxMinGrad": -3.0,
+    "relaxMaxGrad": 1.0,
+    "offsetTime": 0.0,
 }
 
 LARGE_PENALTY = 1_000_000.0
-UNDERESTIMATE_LOSS_MULTIPLIER = 1.0
 
 
 @dataclass(frozen=True)
 class TargetVideo:
     videoPath: Path
-    targetIndex: int
+    releaseIndex: int
+    crtIntervalStartIndex: int
+    crtIntervalEndIndex: int
     datasetName: str
 
 
 @dataclass(frozen=True)
 class CachedVideo:
     videoPath: Path
-    targetIndex: int
-    targetTimeScds: float
-    lowerAnalysisBound: int
-    lFrames: tuple[np.ndarray, ...]
+    releaseIndex: int
+    targetStartIndex: int
+    targetEndIndex: int
+    targetStartTimeScds: float
+    targetEndTimeScds: float
+    intensArr: np.ndarray
     timeArr: np.ndarray
     datasetName: str
 
 
-def loadTargetFrameIndices():
-    with TARGETS_PATH.open("rb") as file:
+def loadReleaseIndices():
+    with RELEASE_TARGETS_PATH.open("rb") as file:
         targetConfig = tomllib.load(file)
 
     return {
-        str(videoName): int(targetIndex)
-        for videoName, targetIndex in targetConfig.get("targets", {}).items()
+        str(videoName): int(releaseIndex)
+        for videoName, releaseIndex in targetConfig.get("targets", {}).items()
     }
+
+
+def loadIntervalTargets():
+    with INTERVAL_TARGETS_PATH.open("rb") as file:
+        targetConfig = tomllib.load(file)
+
+    intervalTargets = {}
+    for videoName, target in targetConfig.get("targets", {}).items():
+        intervalTargets[str(videoName)] = {
+            "crtIntervalStartIndex": int(target["crtIntervalStartIndex"]),
+            "crtIntervalEndIndex": int(target["crtIntervalEndIndex"]),
+        }
+    return intervalTargets
 
 
 def cachePathForVideo(videoPath):
     return CACHE_DIR / f"{videoPath.stem}.npz"
+
+
+def relativeToScript(path):
+    path = Path(path)
+    try:
+        return path.relative_to(SCRIPT_DIR)
+    except ValueError:
+        return path
 
 
 def datasetNameForVideo(videoPath):
@@ -102,27 +124,51 @@ def datasetNameForVideo(videoPath):
     return OTHER_DATASET
 
 
-def validateTargetVideo(videoPath, targetIndex):
+def validateTargetVideo(videoPath, releaseIndex, intervalTarget):
     cachePath = cachePathForVideo(videoPath)
     if not cachePath.exists():
-        return f"cache not found at {cachePath}"
+        return f"cache not found at {relativeToScript(cachePath)}"
 
     try:
         with np.load(cachePath) as data:
-            if "lFrames" not in data or "timesScdsArr" not in data:
-                return "cache missing lFrames or timesScdsArr"
+            if "avgAArr" not in data or "timesScdsArr" not in data:
+                return "cache missing avgAArr or timesScdsArr"
             frameCount = len(data["timesScdsArr"])
+            if len(data["avgAArr"]) != frameCount:
+                return (
+                    "cache avgAArr and timesScdsArr length mismatch: "
+                    f"{len(data['avgAArr'])} != {frameCount}"
+                )
     except Exception as err:
         return f"cache not usable: {type(err).__name__}: {err}"
 
-    if targetIndex < 0 or targetIndex >= frameCount:
-        return f"target frame {targetIndex} outside cache range [0, {frameCount - 1}]"
+    targetStartIndex = intervalTarget["crtIntervalStartIndex"]
+    targetEndIndex = intervalTarget["crtIntervalEndIndex"]
+
+    if releaseIndex < 0 or releaseIndex >= frameCount:
+        return f"release frame {releaseIndex} outside cache range [0, {frameCount - 1}]"
+    if targetStartIndex < 0 or targetStartIndex >= frameCount:
+        return (
+            f"target start frame {targetStartIndex} outside cache range "
+            f"[0, {frameCount - 1}]"
+        )
+    if targetEndIndex < 0 or targetEndIndex >= frameCount:
+        return (
+            f"target end frame {targetEndIndex} outside cache range "
+            f"[0, {frameCount - 1}]"
+        )
+    if targetEndIndex <= targetStartIndex:
+        return (
+            f"target end frame {targetEndIndex} must be after "
+            f"target start frame {targetStartIndex}"
+        )
 
     return None
 
 
 def discoverTargetVideos(verbose=True):
-    targetFrameIndices = loadTargetFrameIndices()
+    releaseIndices = loadReleaseIndices()
+    intervalTargets = loadIntervalTargets()
     targetVideos = []
     skipped = []
     cacheStems = (
@@ -131,19 +177,23 @@ def discoverTargetVideos(verbose=True):
         else set()
     )
 
-    for videoName in sorted(targetFrameIndices, key=str.lower):
+    for videoName in sorted(intervalTargets, key=str.lower):
         videoPath = Path(videoName)
         if videoPath.suffix.lower() not in VIDEO_EXTENSIONS_LOWER:
             skipped.append((videoName, "", "unsupported video extension"))
             continue
 
         datasetName = datasetNameForVideo(videoPath)
+        if videoName not in releaseIndices:
+            skipped.append((videoName, datasetName, "release target not found"))
+            continue
         if videoPath.stem not in cacheStems:
             skipped.append((videoName, datasetName, "cache not found"))
             continue
 
-        targetIndex = targetFrameIndices[videoName]
-        skipReason = validateTargetVideo(videoPath, targetIndex)
+        releaseIndex = releaseIndices[videoName]
+        intervalTarget = intervalTargets[videoName]
+        skipReason = validateTargetVideo(videoPath, releaseIndex, intervalTarget)
         if skipReason is not None:
             skipped.append((videoName, datasetName, skipReason))
             continue
@@ -151,7 +201,9 @@ def discoverTargetVideos(verbose=True):
         targetVideos.append(
             TargetVideo(
                 videoPath=videoPath,
-                targetIndex=targetIndex,
+                releaseIndex=releaseIndex,
+                crtIntervalStartIndex=intervalTarget["crtIntervalStartIndex"],
+                crtIntervalEndIndex=intervalTarget["crtIntervalEndIndex"],
                 datasetName=datasetName,
             )
         )
@@ -207,35 +259,50 @@ def loadCachedVideo(targetVideo, verbose=False):
     cachePath = cachePathForVideo(targetVideo.videoPath)
     if not cachePath.exists():
         raise FileNotFoundError(
-            f"No cache found for {targetVideo.videoPath.name}: {cachePath}"
+            f"No cache found for {targetVideo.videoPath.name}: "
+            f"{relativeToScript(cachePath)}"
         )
 
     with np.load(cachePath) as data:
-        lFrames = data["lFrames"]
+        intensArr = data["avgAArr"].astype(float)
         timeArr = data["timesScdsArr"].astype(float)
 
-    if len(lFrames) < 3:
+    if len(intensArr) != len(timeArr):
+        raise ValueError(
+            f"Cached avgAArr and timesScdsArr length mismatch for "
+            f"{targetVideo.videoPath.name}: {len(intensArr)} != {len(timeArr)}."
+        )
+    if len(timeArr) < 3:
         raise ValueError(f"Not enough cached frames for {targetVideo.videoPath.name}.")
 
-    targetIndex = int(targetVideo.targetIndex)
-    if targetIndex < 0 or targetIndex >= len(timeArr):
-        raise ValueError(
-            f"Target frame {targetIndex} for {targetVideo.videoPath.name} is outside "
-            f"the cached range [0, {len(timeArr) - 1}]."
-        )
+    releaseIndex = int(targetVideo.releaseIndex)
+    targetStartIndex = int(targetVideo.crtIntervalStartIndex)
+    targetEndIndex = int(targetVideo.crtIntervalEndIndex)
+    for label, index in (
+        ("release", releaseIndex),
+        ("target start", targetStartIndex),
+        ("target end", targetEndIndex),
+    ):
+        if index < 0 or index >= len(timeArr):
+            raise ValueError(
+                f"{label} frame {index} for {targetVideo.videoPath.name} is outside "
+                f"the cached range [0, {len(timeArr) - 1}]."
+            )
 
     cached = CachedVideo(
         videoPath=targetVideo.videoPath,
-        targetIndex=targetIndex,
-        targetTimeScds=float(timeArr[targetIndex]),
-        lowerAnalysisBound=0,
-        lFrames=tuple(lFrames),
+        releaseIndex=releaseIndex,
+        targetStartIndex=targetStartIndex,
+        targetEndIndex=targetEndIndex,
+        targetStartTimeScds=float(timeArr[targetStartIndex]),
+        targetEndTimeScds=float(timeArr[targetEndIndex]),
+        intensArr=intensArr,
         timeArr=timeArr,
         datasetName=targetVideo.datasetName,
     )
     if verbose:
         print(
-            f"loaded cache {cachePath}: frames={len(lFrames)}",
+            f"loaded cache {relativeToScript(cachePath)}: frames={len(timeArr)}",
             flush=True,
         )
     return cached
@@ -251,112 +318,239 @@ def buildCache(targetVideos, verbose=False):
     ]
 
 
-def selectFrameCached(cachedVideo, params):
-    cannyArr = cannySumsFromLFrames(cachedVideo.lFrames, params)
-    localReleaseIndex = findReleaseIndex(cannyArr, cachedVideo.timeArr, params)
-    return localReleaseIndex + cachedVideo.lowerAnalysisBound
+def paramsAreValid(params):
+    return (
+        params["strictMinGrad"] < params["strictMaxGrad"]
+        and params["relaxMinGrad"] < params["relaxMaxGrad"]
+        and params["relaxMinGrad"] <= params["strictMinGrad"]
+        and params["relaxMaxGrad"] >= params["strictMaxGrad"]
+    )
 
 
-def weightedTimeError(timeErrorScds):
-    multiplier = UNDERESTIMATE_LOSS_MULTIPLIER if timeErrorScds < 0 else 1.0
-    return multiplier * timeErrorScds
+def selectIntervalCached(cachedVideo, params):
+    crtIntervalStartIndex, _, crtIntervalEndIndex = optimizableFindCrtIntervalIndices(
+        cachedVideo.intensArr,
+        cachedVideo.timeArr,
+        cachedVideo.releaseIndex,
+        params["strictMinGrad"],
+        params["strictMaxGrad"],
+        params["relaxMinGrad"],
+        params["relaxMaxGrad"],
+        offsetTime=params["offsetTime"],
+    )
+    return int(crtIntervalStartIndex), int(crtIntervalEndIndex)
 
 
-def failureResult(videoName, datasetName, targetIndex, targetTimeScds, err):
+def failureResult(videoName, datasetName, targetVideo, err):
+    if targetVideo is None:
+        return {
+            "video": videoName,
+            "dataset": datasetName,
+            "release": None,
+            "target_start": None,
+            "target_start_time_s": None,
+            "predicted_start": None,
+            "predicted_start_time_s": None,
+            "start_frame_error": None,
+            "start_time_error_s": None,
+            "target_end": None,
+            "target_end_time_s": None,
+            "predicted_end": None,
+            "predicted_end_time_s": None,
+            "end_frame_error": None,
+            "end_time_error_s": None,
+            "duration_time_error_s": None,
+            "exception": f"{type(err).__name__}: {err}",
+        }
+
     return {
         "video": videoName,
         "dataset": datasetName,
-        "target": targetIndex,
-        "target_time_s": targetTimeScds,
-        "predicted": None,
-        "predicted_time_s": None,
-        "frame_error": None,
-        "time_error_s": None,
-        "weighted_time_error_s": None,
+        "release": targetVideo.releaseIndex,
+        "target_start": targetVideo.targetStartIndex,
+        "target_start_time_s": targetVideo.targetStartTimeScds,
+        "predicted_start": None,
+        "predicted_start_time_s": None,
+        "start_frame_error": None,
+        "start_time_error_s": None,
+        "target_end": targetVideo.targetEndIndex,
+        "target_end_time_s": targetVideo.targetEndTimeScds,
+        "predicted_end": None,
+        "predicted_end_time_s": None,
+        "end_frame_error": None,
+        "end_time_error_s": None,
+        "duration_time_error_s": None,
         "exception": f"{type(err).__name__}: {err}",
     }
 
 
 def evaluateCachedVideo(cachedVideo, params):
     try:
-        predictedIndex = selectFrameCached(cachedVideo, params)
-        predictedLocalIndex = int(predictedIndex) - cachedVideo.lowerAnalysisBound
-        predictedTimeScds = float(cachedVideo.timeArr[predictedLocalIndex])
-        frameError = int(predictedIndex) - cachedVideo.targetIndex
-        timeErrorScds = predictedTimeScds - cachedVideo.targetTimeScds
-        weightedErrorScds = weightedTimeError(timeErrorScds)
+        predictedStartIndex, predictedEndIndex = selectIntervalCached(
+            cachedVideo,
+            params,
+        )
+        predictedStartTimeScds = float(cachedVideo.timeArr[predictedStartIndex])
+        predictedEndTimeScds = float(cachedVideo.timeArr[predictedEndIndex])
+        startFrameError = int(predictedStartIndex) - cachedVideo.targetStartIndex
+        endFrameError = int(predictedEndIndex) - cachedVideo.targetEndIndex
+        startTimeErrorScds = predictedStartTimeScds - cachedVideo.targetStartTimeScds
+        endTimeErrorScds = predictedEndTimeScds - cachedVideo.targetEndTimeScds
+        targetDurationScds = (
+            cachedVideo.targetEndTimeScds - cachedVideo.targetStartTimeScds
+        )
+        predictedDurationScds = predictedEndTimeScds - predictedStartTimeScds
+        durationTimeErrorScds = predictedDurationScds - targetDurationScds
         return {
             "video": cachedVideo.videoPath.name,
             "dataset": cachedVideo.datasetName,
-            "target": cachedVideo.targetIndex,
-            "target_time_s": cachedVideo.targetTimeScds,
-            "predicted": int(predictedIndex),
-            "predicted_time_s": predictedTimeScds,
-            "frame_error": int(frameError),
-            "time_error_s": timeErrorScds,
-            "weighted_time_error_s": weightedErrorScds,
+            "release": cachedVideo.releaseIndex,
+            "target_start": cachedVideo.targetStartIndex,
+            "target_start_time_s": cachedVideo.targetStartTimeScds,
+            "predicted_start": int(predictedStartIndex),
+            "predicted_start_time_s": predictedStartTimeScds,
+            "start_frame_error": int(startFrameError),
+            "start_time_error_s": startTimeErrorScds,
+            "target_end": cachedVideo.targetEndIndex,
+            "target_end_time_s": cachedVideo.targetEndTimeScds,
+            "predicted_end": int(predictedEndIndex),
+            "predicted_end_time_s": predictedEndTimeScds,
+            "end_frame_error": int(endFrameError),
+            "end_time_error_s": endTimeErrorScds,
+            "duration_time_error_s": durationTimeErrorScds,
         }
     except Exception as err:
         return failureResult(
             cachedVideo.videoPath.name,
             cachedVideo.datasetName,
-            cachedVideo.targetIndex,
-            cachedVideo.targetTimeScds,
+            cachedVideo,
             err,
         )
 
 
+def metricSummary(values):
+    values = np.array(values, dtype=float)
+    if len(values) == 0:
+        raise ValueError("Cannot calculate metrics for an empty value set.")
+    absoluteValues = np.abs(values)
+    return {
+        "mae": float(np.mean(absoluteValues)),
+        "rmse": float(np.sqrt(np.mean(values**2))),
+        "max_abs": float(np.max(absoluteValues)),
+    }
+
+
 def metricsFromResults(params, results):
-    squaredTimeErrors = []
-    absoluteTimeErrors = []
-    squaredWeightedTimeErrors = []
-    absoluteWeightedTimeErrors = []
-    squaredFrameErrors = []
-    absoluteFrameErrors = []
+    startTimeErrors = []
+    endTimeErrors = []
+    endpointTimeErrors = []
+    durationTimeErrors = []
+    startFrameErrors = []
+    endFrameErrors = []
+    endpointFrameErrors = []
 
     for result in results:
-        if result["predicted"] is None:
-            squaredTimeErrors.append(LARGE_PENALTY)
-            absoluteTimeErrors.append(LARGE_PENALTY)
-            squaredWeightedTimeErrors.append(LARGE_PENALTY)
-            absoluteWeightedTimeErrors.append(LARGE_PENALTY)
-            squaredFrameErrors.append(LARGE_PENALTY)
-            absoluteFrameErrors.append(LARGE_PENALTY)
+        if result["predicted_start"] is None or result["predicted_end"] is None:
+            startTimeErrors.append(LARGE_PENALTY)
+            endTimeErrors.append(LARGE_PENALTY)
+            endpointTimeErrors.extend([LARGE_PENALTY, LARGE_PENALTY])
+            durationTimeErrors.append(LARGE_PENALTY)
+            startFrameErrors.append(LARGE_PENALTY)
+            endFrameErrors.append(LARGE_PENALTY)
+            endpointFrameErrors.extend([LARGE_PENALTY, LARGE_PENALTY])
             continue
 
-        timeErrorScds = result["time_error_s"]
-        weightedErrorScds = result["weighted_time_error_s"]
-        frameError = result["frame_error"]
-        squaredTimeErrors.append(timeErrorScds**2)
-        absoluteTimeErrors.append(abs(timeErrorScds))
-        squaredWeightedTimeErrors.append(weightedErrorScds**2)
-        absoluteWeightedTimeErrors.append(abs(weightedErrorScds))
-        squaredFrameErrors.append(frameError**2)
-        absoluteFrameErrors.append(abs(frameError))
+        startTimeError = result["start_time_error_s"]
+        endTimeError = result["end_time_error_s"]
+        durationTimeError = result["duration_time_error_s"]
+        startFrameError = result["start_frame_error"]
+        endFrameError = result["end_frame_error"]
+
+        startTimeErrors.append(startTimeError)
+        endTimeErrors.append(endTimeError)
+        endpointTimeErrors.extend([startTimeError, endTimeError])
+        durationTimeErrors.append(durationTimeError)
+        startFrameErrors.append(startFrameError)
+        endFrameErrors.append(endFrameError)
+        endpointFrameErrors.extend([startFrameError, endFrameError])
 
     if not results:
         raise ValueError("Cannot calculate metrics for an empty result set.")
 
-    failureCount = sum(result["predicted"] is None for result in results)
+    startTime = metricSummary(startTimeErrors)
+    endTime = metricSummary(endTimeErrors)
+    endpointTime = metricSummary(endpointTimeErrors)
+    durationTime = metricSummary(durationTimeErrors)
+    startFrame = metricSummary(startFrameErrors)
+    endFrame = metricSummary(endFrameErrors)
+    endpointFrame = metricSummary(endpointFrameErrors)
+    failureCount = sum(
+        result["predicted_start"] is None or result["predicted_end"] is None
+        for result in results
+    )
+
     return {
         "params": params,
         "video_count": len(results),
         "failure_count": int(failureCount),
         "success_rate": float((len(results) - failureCount) / len(results)),
-        "mae_s": float(np.mean(absoluteTimeErrors)),
-        "rmse_s": float(np.sqrt(np.mean(squaredTimeErrors))),
-        "max_abs_error_s": float(np.max(absoluteTimeErrors)),
-        "weighted_mae_s": float(np.mean(absoluteWeightedTimeErrors)),
-        "weighted_rmse_s": float(np.sqrt(np.mean(squaredWeightedTimeErrors))),
-        "weighted_max_abs_error_s": float(np.max(absoluteWeightedTimeErrors)),
-        "mae_frames": float(np.mean(absoluteFrameErrors)),
-        "rmse_frames": float(np.sqrt(np.mean(squaredFrameErrors))),
-        "max_abs_error_frames": float(np.max(absoluteFrameErrors)),
+        "start_mae_s": startTime["mae"],
+        "start_rmse_s": startTime["rmse"],
+        "start_max_abs_error_s": startTime["max_abs"],
+        "end_mae_s": endTime["mae"],
+        "end_rmse_s": endTime["rmse"],
+        "end_max_abs_error_s": endTime["max_abs"],
+        "endpoint_mae_s": endpointTime["mae"],
+        "endpoint_rmse_s": endpointTime["rmse"],
+        "endpoint_max_abs_error_s": endpointTime["max_abs"],
+        "duration_mae_s": durationTime["mae"],
+        "duration_rmse_s": durationTime["rmse"],
+        "duration_max_abs_error_s": durationTime["max_abs"],
+        "start_mae_frames": startFrame["mae"],
+        "start_rmse_frames": startFrame["rmse"],
+        "start_max_abs_error_frames": startFrame["max_abs"],
+        "end_mae_frames": endFrame["mae"],
+        "end_rmse_frames": endFrame["rmse"],
+        "end_max_abs_error_frames": endFrame["max_abs"],
+        "endpoint_mae_frames": endpointFrame["mae"],
+        "endpoint_rmse_frames": endpointFrame["rmse"],
+        "endpoint_max_abs_error_frames": endpointFrame["max_abs"],
         "results": results,
     }
 
 
+def failedTrialMetrics(params, videoCount, exception):
+    failure = {
+        "video": "<trial>",
+        "dataset": "",
+        "release": None,
+        "target_start": None,
+        "target_start_time_s": None,
+        "predicted_start": None,
+        "predicted_start_time_s": None,
+        "start_frame_error": None,
+        "start_time_error_s": None,
+        "target_end": None,
+        "target_end_time_s": None,
+        "predicted_end": None,
+        "predicted_end_time_s": None,
+        "end_frame_error": None,
+        "end_time_error_s": None,
+        "duration_time_error_s": None,
+        "exception": exception,
+    }
+    return metricsFromResults(params, [failure] * int(videoCount))
+
+
 def evaluateParams(params, cache, verbose=False):
+    if not paramsAreValid(params):
+        return failedTrialMetrics(
+            params,
+            len(cache),
+            "InvalidParametersError: gradient bounds do not satisfy "
+            "relaxMinGrad <= strictMinGrad < strictMaxGrad <= relaxMaxGrad",
+        )
+
     results = [evaluateCachedVideo(cachedVideo, params) for cachedVideo in cache]
     if verbose:
         for result in results:
@@ -374,7 +568,6 @@ def evaluateTargetVideos(params, targetVideos, verbose=False):
             result = failureResult(
                 targetVideo.videoPath.name,
                 targetVideo.datasetName,
-                targetVideo.targetIndex,
                 None,
                 err,
             )
@@ -386,86 +579,52 @@ def evaluateTargetVideos(params, targetVideos, verbose=False):
 
 
 def suggestParams(trial):
-    thresh1 = trial.suggest_int("thresh1", THRESH1_MIN, THRESH1_MAX)
-    thresh2 = trial.suggest_int("thresh2", thresh1 + 1, THRESH2_MAX)
     return {
-        "thresh1": thresh1,
-        "thresh2": thresh2,
-        "blurKernel": trial.suggest_int("blurKernel", BLUR_KERNEL_MIN, BLUR_KERNEL_MAX),
-        "l2grad": trial.suggest_categorical("l2grad", [False, True]),
-        "cannyPlateau": trial.suggest_float(
-            "cannyPlateau",
-            CANNY_PLATEAU_MIN,
-            CANNY_PLATEAU_MAX,
-            log=True,
+        "strictMinGrad": trial.suggest_float(
+            "strictMinGrad",
+            STRICT_MIN_GRAD_MIN,
+            STRICT_MIN_GRAD_MAX,
         ),
-        "cannySmoothingKernel": trial.suggest_categorical(
-            "cannySmoothingKernel",
-            CANNY_SMOOTHING_KERNEL_CHOICES,
+        "strictMaxGrad": trial.suggest_float(
+            "strictMaxGrad",
+            STRICT_MAX_GRAD_MIN,
+            STRICT_MAX_GRAD_MAX,
         ),
-        "cannyGradientSmoothingKernel": trial.suggest_categorical(
-            "cannyGradientSmoothingKernel",
-            CANNY_GRADIENT_SMOOTHING_KERNEL_CHOICES,
+        "relaxMinGrad": trial.suggest_float(
+            "relaxMinGrad",
+            RELAX_MIN_GRAD_MIN,
+            RELAX_MIN_GRAD_MAX,
         ),
-        "indexOffset": trial.suggest_int(
-            "indexOffset", INDEX_OFFSET_MIN, INDEX_OFFSET_MAX
+        "relaxMaxGrad": trial.suggest_float(
+            "relaxMaxGrad",
+            RELAX_MAX_GRAD_MIN,
+            RELAX_MAX_GRAD_MAX,
+        ),
+        "offsetTime": trial.suggest_float(
+            "offsetTime",
+            OFFSET_TIME_MIN,
+            OFFSET_TIME_MAX,
         ),
     }
 
 
-def randomLogUniform(rng, low, high):
-    return float(np.exp(rng.uniform(np.log(low), np.log(high))))
-
-
-def randomChoice(rng, choices):
-    return choices[int(rng.integers(0, len(choices)))]
+def randomUniform(rng, low, high):
+    return float(rng.uniform(low, high))
 
 
 def randomParams(rng):
-    thresh1 = int(rng.integers(THRESH1_MIN, THRESH1_MAX + 1))
-    thresh2 = int(rng.integers(thresh1 + 1, THRESH2_MAX + 1))
+    strictMinGrad = randomUniform(rng, STRICT_MIN_GRAD_MIN, STRICT_MIN_GRAD_MAX)
+    strictMaxLow = max(STRICT_MAX_GRAD_MIN, strictMinGrad + MIN_GRAD_SPAN)
+    strictMaxGrad = randomUniform(rng, strictMaxLow, STRICT_MAX_GRAD_MAX)
+    relaxMinGrad = randomUniform(rng, RELAX_MIN_GRAD_MIN, strictMinGrad)
+    relaxMaxLow = max(RELAX_MAX_GRAD_MIN, strictMaxGrad)
+    relaxMaxGrad = randomUniform(rng, relaxMaxLow, RELAX_MAX_GRAD_MAX)
     return {
-        "thresh1": thresh1,
-        "thresh2": thresh2,
-        "blurKernel": int(rng.integers(BLUR_KERNEL_MIN, BLUR_KERNEL_MAX + 1)),
-        "l2grad": bool(randomChoice(rng, [False, True])),
-        "cannyPlateau": randomLogUniform(rng, CANNY_PLATEAU_MIN, CANNY_PLATEAU_MAX),
-        "cannySmoothingKernel": int(randomChoice(rng, CANNY_SMOOTHING_KERNEL_CHOICES)),
-        "cannyGradientSmoothingKernel": int(
-            randomChoice(rng, CANNY_GRADIENT_SMOOTHING_KERNEL_CHOICES)
-        ),
-        "indexOffset": int(rng.integers(INDEX_OFFSET_MIN, INDEX_OFFSET_MAX + 1)),
-    }
-
-
-def failedTrialMetrics(params, videoCount, exception):
-    failureResult = {
-        "video": "<trial>",
-        "dataset": "",
-        "target": None,
-        "target_time_s": None,
-        "predicted": None,
-        "predicted_time_s": None,
-        "frame_error": None,
-        "time_error_s": None,
-        "weighted_time_error_s": None,
-        "exception": exception,
-    }
-    return {
-        "params": params,
-        "video_count": int(videoCount),
-        "failure_count": int(videoCount),
-        "success_rate": 0.0,
-        "mae_s": LARGE_PENALTY,
-        "rmse_s": LARGE_PENALTY,
-        "max_abs_error_s": LARGE_PENALTY,
-        "weighted_mae_s": LARGE_PENALTY,
-        "weighted_rmse_s": LARGE_PENALTY,
-        "weighted_max_abs_error_s": LARGE_PENALTY,
-        "mae_frames": LARGE_PENALTY,
-        "rmse_frames": LARGE_PENALTY,
-        "max_abs_error_frames": LARGE_PENALTY,
-        "results": [failureResult],
+        "strictMinGrad": strictMinGrad,
+        "strictMaxGrad": strictMaxGrad,
+        "relaxMinGrad": relaxMinGrad,
+        "relaxMaxGrad": relaxMaxGrad,
+        "offsetTime": randomUniform(rng, OFFSET_TIME_MIN, OFFSET_TIME_MAX),
     }
 
 
@@ -588,7 +747,7 @@ class TimedTrialEvaluator:
             return payload
 
 
-def makeObjective(cache, restartIndex, verbose=False):
+def makeObjective(cache, repeatIndex, verbose=False):
     bestValue = np.inf
     evaluator = TimedTrialEvaluator(cache, TRIAL_TIMEOUT_SECONDS)
 
@@ -598,15 +757,20 @@ def makeObjective(cache, restartIndex, verbose=False):
         metrics = evaluator.evaluate(params, trial.number, verbose=verbose)
         value = metrics[VALIDATION_METRIC]
 
-        trial.set_user_attr("mae_s", metrics["mae_s"])
-        trial.set_user_attr("max_abs_error_s", metrics["max_abs_error_s"])
-        trial.set_user_attr("weighted_mae_s", metrics["weighted_mae_s"])
+        trial.set_user_attr("params", params)
+        trial.set_user_attr("start_mae_s", metrics["start_mae_s"])
+        trial.set_user_attr("start_rmse_s", metrics["start_rmse_s"])
+        trial.set_user_attr("end_mae_s", metrics["end_mae_s"])
+        trial.set_user_attr("end_rmse_s", metrics["end_rmse_s"])
+        trial.set_user_attr("endpoint_mae_s", metrics["endpoint_mae_s"])
         trial.set_user_attr(
-            "weighted_max_abs_error_s",
-            metrics["weighted_max_abs_error_s"],
+            "endpoint_max_abs_error_s", metrics["endpoint_max_abs_error_s"]
         )
-        trial.set_user_attr("mae_frames", metrics["mae_frames"])
-        trial.set_user_attr("max_abs_error_frames", metrics["max_abs_error_frames"])
+        trial.set_user_attr("endpoint_mae_frames", metrics["endpoint_mae_frames"])
+        trial.set_user_attr(
+            "endpoint_max_abs_error_frames",
+            metrics["endpoint_max_abs_error_frames"],
+        )
         trial.set_user_attr("failure_count", metrics["failure_count"])
         trial.set_user_attr("success_rate", metrics["success_rate"])
         trial.set_user_attr("results", metrics["results"])
@@ -614,13 +778,13 @@ def makeObjective(cache, restartIndex, verbose=False):
         if value < bestValue:
             bestValue = value
             print(
-                f"restart={restartIndex} "
+                f"repeat={repeatIndex} "
                 f"new_best_{VALIDATION_METRIC}={value:.6f} "
-                f"weighted_mae_s={metrics['weighted_mae_s']:.6f} "
-                f"raw_rmse_s={metrics['rmse_s']:.6f} "
-                f"raw_mae_s={metrics['mae_s']:.6f} "
-                f"max_abs_error_s={metrics['max_abs_error_s']:.6f} "
-                f"rmse_frames={metrics['rmse_frames']:.3f} "
+                f"endpoint_mae_s={metrics['endpoint_mae_s']:.6f} "
+                f"start_rmse_s={metrics['start_rmse_s']:.6f} "
+                f"end_rmse_s={metrics['end_rmse_s']:.6f} "
+                f"endpoint_max_abs_error_s={metrics['endpoint_max_abs_error_s']:.6f} "
+                f"endpoint_rmse_frames={metrics['endpoint_rmse_frames']:.3f} "
                 f"trial={trial.number} "
                 f"params={json.dumps(params)}",
                 flush=True,
@@ -693,14 +857,25 @@ def selectOptimizationSet(targetVideos, validationSet, rng):
     return selectRandomSubset(candidates, optimizationCount, rng)
 
 
-def runRestart(restartIndex, targetVideos, validationSet, validationCache, rng, args):
-    optimizationSet = selectOptimizationSet(targetVideos, validationSet, rng)
+def runRepeat(
+    repeatIndex,
+    targetVideos,
+    validationSet,
+    validationCache,
+    rng,
+    args,
+):
+    optimizationSet = selectOptimizationSet(
+        targetVideos,
+        validationSet,
+        rng,
+    )
     optimizationCache = buildCache(optimizationSet, verbose=False)
     initialParams = randomParams(rng)
     samplerSeed = int(rng.integers(0, np.iinfo(np.uint32).max))
 
     print(
-        f"restart={restartIndex}/{args.restarts} "
+        f"repeat={repeatIndex}/{args.repeats} "
         f"optimization_videos={len(optimizationSet)} "
         f"optimization_datasets={json.dumps(countByDataset(optimizationSet), sort_keys=True)} "
         f"initial_params={json.dumps(initialParams)}",
@@ -710,7 +885,7 @@ def runRestart(restartIndex, targetVideos, validationSet, validationCache, rng, 
     sampler = optuna.samplers.TPESampler(seed=samplerSeed)
     study = optuna.create_study(direction="minimize", sampler=sampler)
     study.enqueue_trial(initialParams)
-    objective = makeObjective(optimizationCache, restartIndex, verbose=args.verbose)
+    objective = makeObjective(optimizationCache, repeatIndex, verbose=args.verbose)
     try:
         study.optimize(
             objective,
@@ -721,24 +896,24 @@ def runRestart(restartIndex, targetVideos, validationSet, validationCache, rng, 
     finally:
         objective.close()
 
-    bestParams = dict(study.best_trial.params)
+    bestParams = dict(study.best_trial.user_attrs["params"])
     optimizationMetrics = evaluateParams(bestParams, optimizationCache, verbose=False)
     validationMetrics = evaluateParams(bestParams, validationCache, verbose=False)
     validationValue = validationMetrics[VALIDATION_METRIC]
 
     print(
-        f"restart={restartIndex} "
+        f"repeat={repeatIndex} "
         f"best_trial={study.best_trial.number} "
         f"optimization_{VALIDATION_METRIC}={optimizationMetrics[VALIDATION_METRIC]:.6f} "
         f"validation_{VALIDATION_METRIC}={validationValue:.6f} "
-        f"validation_mae_s={validationMetrics['mae_s']:.6f} "
+        f"validation_endpoint_mae_s={validationMetrics['endpoint_mae_s']:.6f} "
         f"validation_success_rate={validationMetrics['success_rate']:.6f} "
         f"params={json.dumps(bestParams)}",
         flush=True,
     )
 
     return {
-        "restart": restartIndex,
+        "repeat": repeatIndex,
         "study": study,
         "optimization_set": optimizationSet,
         "initial_params": initialParams,
@@ -775,31 +950,43 @@ def printMetrics(metrics):
         f"success_rate={metrics['success_rate']:.6f}"
     )
     print(
-        f"mae={metrics['mae_s']:.6f} s, "
-        f"rmse={metrics['rmse_s']:.6f} s, "
-        f"max_abs_error={metrics['max_abs_error_s']:.6f} s"
+        f"start_mae={metrics['start_mae_s']:.6f} s, "
+        f"start_rmse={metrics['start_rmse_s']:.6f} s, "
+        f"start_max_abs_error={metrics['start_max_abs_error_s']:.6f} s"
     )
     print(
-        f"weighted_mae={metrics['weighted_mae_s']:.6f} s, "
-        f"weighted_rmse={metrics['weighted_rmse_s']:.6f} s, "
-        f"weighted_max_abs_error={metrics['weighted_max_abs_error_s']:.6f} s"
+        f"end_mae={metrics['end_mae_s']:.6f} s, "
+        f"end_rmse={metrics['end_rmse_s']:.6f} s, "
+        f"end_max_abs_error={metrics['end_max_abs_error_s']:.6f} s"
     )
     print(
-        f"mae={metrics['mae_frames']:.3f} frames, "
-        f"rmse={metrics['rmse_frames']:.3f} frames, "
-        f"max_abs_error={metrics['max_abs_error_frames']:.3f} frames"
+        f"endpoint_mae={metrics['endpoint_mae_s']:.6f} s, "
+        f"endpoint_rmse={metrics['endpoint_rmse_s']:.6f} s, "
+        f"endpoint_max_abs_error={metrics['endpoint_max_abs_error_s']:.6f} s"
+    )
+    print(
+        f"duration_mae={metrics['duration_mae_s']:.6f} s, "
+        f"duration_rmse={metrics['duration_rmse_s']:.6f} s, "
+        f"duration_max_abs_error={metrics['duration_max_abs_error_s']:.6f} s"
+    )
+    print(
+        f"endpoint_mae={metrics['endpoint_mae_frames']:.3f} frames, "
+        f"endpoint_rmse={metrics['endpoint_rmse_frames']:.3f} frames, "
+        f"endpoint_max_abs_error={metrics['endpoint_max_abs_error_frames']:.3f} frames"
     )
     print("per-video:")
     for result in metrics["results"]:
-        if result["predicted"] is None:
+        if result["predicted_start"] is None or result["predicted_end"] is None:
             print(f"  {result['video']}: failed ({result['exception']})")
         else:
             print(
-                f"  {result['video']}: target={result['target']}, "
-                f"predicted={result['predicted']}, "
-                f"frame_error={result['frame_error']:+d}, "
-                f"time_error={result['time_error_s']:+.6f} s, "
-                f"weighted_time_error={result['weighted_time_error_s']:+.6f} s"
+                f"  {result['video']}: "
+                f"target=({result['target_start']}, {result['target_end']}), "
+                f"predicted=({result['predicted_start']}, {result['predicted_end']}), "
+                f"start_frame_error={result['start_frame_error']:+d}, "
+                f"end_frame_error={result['end_frame_error']:+d}, "
+                f"start_time_error={result['start_time_error_s']:+.6f} s, "
+                f"end_time_error={result['end_time_error_s']:+.6f} s"
             )
 
 
@@ -845,15 +1032,27 @@ def appendMetrics(lines, metrics):
         "video_count",
         "failure_count",
         "success_rate",
-        "mae_s",
-        "rmse_s",
-        "max_abs_error_s",
-        "weighted_mae_s",
-        "weighted_rmse_s",
-        "weighted_max_abs_error_s",
-        "mae_frames",
-        "rmse_frames",
-        "max_abs_error_frames",
+        "start_mae_s",
+        "start_rmse_s",
+        "start_max_abs_error_s",
+        "end_mae_s",
+        "end_rmse_s",
+        "end_max_abs_error_s",
+        "endpoint_mae_s",
+        "endpoint_rmse_s",
+        "endpoint_max_abs_error_s",
+        "duration_mae_s",
+        "duration_rmse_s",
+        "duration_max_abs_error_s",
+        "start_mae_frames",
+        "start_rmse_frames",
+        "start_max_abs_error_frames",
+        "end_mae_frames",
+        "end_rmse_frames",
+        "end_max_abs_error_frames",
+        "endpoint_mae_frames",
+        "endpoint_rmse_frames",
+        "endpoint_max_abs_error_frames",
     ):
         lines.append(f"{key} = {tomlValue(metrics[key])}")
 
@@ -863,7 +1062,7 @@ def writeOptimizedParamsToml(
     bestRecord,
     validationSet,
     finalPerformance,
-    restartRecords,
+    repeatRecords,
     seed,
 ):
     lines = []
@@ -871,15 +1070,21 @@ def writeOptimizedParamsToml(
     appendSection(lines, "run")
     lines.append(f"seed = {tomlValue(seed)}")
     lines.append(f"validation_metric = {tomlValue(VALIDATION_METRIC)}")
-    lines.append(f"restarts = {tomlValue(len(restartRecords))}")
-    lines.append(f"trials_per_restart = {tomlValue(N_TRIALS_PER_RESTART)}")
+    lines.append(f"repeats = {tomlValue(len(repeatRecords))}")
+    lines.append(f"trials_per_repeat = {tomlValue(N_TRIALS_PER_REPEAT)}")
     lines.append(f"validation_video_ratio = {tomlValue(VALIDATION_VIDEO_RATIO)}")
     lines.append(f"optimization_video_ratio = {tomlValue(OPTIMIZATION_VIDEO_RATIO)}")
-    lines.append(f"cache_dir = {tomlValue(CACHE_DIR)}")
+    lines.append(f"cache_dir = {tomlValue(relativeToScript(CACHE_DIR))}")
+    lines.append(
+        f"release_targets_path = {tomlValue(relativeToScript(RELEASE_TARGETS_PATH))}"
+    )
+    lines.append(
+        f"interval_targets_path = {tomlValue(relativeToScript(INTERVAL_TARGETS_PATH))}"
+    )
     lines.append(f"trial_timeout_seconds = {tomlValue(TRIAL_TIMEOUT_SECONDS)}")
 
     appendSection(lines, "best")
-    lines.append(f"restart = {tomlValue(bestRecord['restart'])}")
+    lines.append(f"repeat = {tomlValue(bestRecord['repeat'])}")
     lines.append(
         f"validation_{VALIDATION_METRIC} = "
         f"{tomlValue(bestRecord['validation_metrics'][VALIDATION_METRIC])}"
@@ -917,9 +1122,9 @@ def writeOptimizedParamsToml(
         [targetVideo.videoPath.name for targetVideo in bestRecord["optimization_set"]],
     )
 
-    for record in restartRecords:
-        appendTableArray(lines, "restarts_summary")
-        lines.append(f"restart = {tomlValue(record['restart'])}")
+    for record in repeatRecords:
+        appendTableArray(lines, "repeats_summary")
+        lines.append(f"repeat = {tomlValue(record['repeat'])}")
         lines.append(f"best_trial = {tomlValue(record['study'].best_trial.number)}")
         lines.append(
             f"optimization_{VALIDATION_METRIC} = "
@@ -940,18 +1145,18 @@ def writeOptimizedParamsToml(
 def parseArgs():
     parser = argparse.ArgumentParser(
         description=(
-            "Optimize Canny release detection parameters with repeated random "
-            "optimization splits and one fixed validation split."
+            "Optimize CRT interval detection gradient bounds and offset with "
+            "repeated random optimization splits and one fixed validation split."
         )
     )
-    parser.add_argument("--restarts", type=int, default=N_RESTARTS)
-    parser.add_argument("--n-trials", type=int, default=N_TRIALS_PER_RESTART)
+    parser.add_argument("--repeats", type=int, default=N_REPEATS)
+    parser.add_argument("--n-trials", type=int, default=N_TRIALS_PER_REPEAT)
     parser.add_argument("--timeout", type=float, default=OPTUNA_TIMEOUT)
     parser.add_argument("--seed", type=int, default=OPTUNA_SEED)
     parser.add_argument(
         "--evaluate-only",
         action="store_true",
-        help="Evaluate default params against all discovered target videos.",
+        help="Evaluate default params against all discovered interval target videos.",
     )
     parser.add_argument(
         "--videos",
@@ -973,15 +1178,15 @@ def parseArgs():
 
 def main():
     mp.freeze_support()
-    global N_RESTARTS
-    global N_TRIALS_PER_RESTART
+    global N_REPEATS
+    global N_TRIALS_PER_REPEAT
 
     args = parseArgs()
-    N_RESTARTS = args.restarts
-    N_TRIALS_PER_RESTART = args.n_trials
+    N_REPEATS = args.repeats
+    N_TRIALS_PER_REPEAT = args.n_trials
 
-    if args.restarts < 1:
-        raise ValueError("--restarts must be positive.")
+    if args.repeats < 1:
+        raise ValueError("--repeats must be positive.")
     if args.n_trials < 1:
         raise ValueError("--n-trials must be positive.")
 
@@ -990,11 +1195,13 @@ def main():
         args.videos,
     )
     if not targetVideos:
-        raise ValueError("No usable target videos were found.")
+        raise ValueError("No usable interval target videos were found.")
 
     if args.evaluate_only:
         metrics = evaluateTargetVideos(
-            DEFAULT_PARAMS, targetVideos, verbose=args.verbose
+            DEFAULT_PARAMS,
+            targetVideos,
+            verbose=args.verbose,
         )
         printMetrics(metrics)
         return
@@ -1012,29 +1219,29 @@ def main():
 
     bestRecord = None
     bestValidationValue = np.inf
-    restartRecords = []
-    for restartIndex in range(1, args.restarts + 1):
-        record = runRestart(
-            restartIndex,
+    repeatRecords = []
+    for repeatIndex in range(1, args.repeats + 1):
+        record = runRepeat(
+            repeatIndex,
             targetVideos,
             validationSet,
             validationCache,
             rng,
             args,
         )
-        restartRecords.append(record)
+        repeatRecords.append(record)
         validationValue = record["validation_metrics"][VALIDATION_METRIC]
         if validationValue < bestValidationValue:
             bestValidationValue = validationValue
             bestRecord = record
             print(
-                f"new_best_restart={restartIndex} "
+                f"new_best_repeat={repeatIndex} "
                 f"validation_{VALIDATION_METRIC}={validationValue:.6f}",
                 flush=True,
             )
 
     if bestRecord is None:
-        raise RuntimeError("No restart completed successfully.")
+        raise RuntimeError("No repeat completed successfully.")
 
     finalPerformance = evaluateAllDatasets(
         bestRecord["params"],
@@ -1047,11 +1254,11 @@ def main():
         bestRecord,
         validationSet,
         finalPerformance,
-        restartRecords,
+        repeatRecords,
         args.seed,
     )
 
-    print(f"best_restart={bestRecord['restart']}")
+    print(f"best_repeat={bestRecord['repeat']}")
     print("validation performance:")
     printMetrics(bestRecord["validation_metrics"])
     print("all-datasets performance:")
@@ -1059,7 +1266,7 @@ def main():
     for datasetName, metrics in finalPerformance["datasets"].items():
         print(f"{datasetName} performance:")
         printMetrics(metrics)
-    print(f"wrote {OUTPUT_PATH}")
+    print(f"wrote {relativeToScript(OUTPUT_PATH)}")
 
 
 if __name__ == "__main__":

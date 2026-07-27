@@ -39,6 +39,7 @@ CACHE_DIR = Path("Npz/Cache")
 TARGETS_PATH = Path("target_frames.toml")
 OPTIMIZED_CANNY_PARAMS_PATH = Path("optimized_params_canny.toml")
 OPTIMIZED_LAPLACIAN_PARAMS_PATH = Path("optimized_params_laplacian.toml")
+OPTIMIZED_CRT_INTERVAL_PARAMS_PATH = Path("optimized_params_crt_interval.toml")
 
 VIDEOS_DIR_LIST = [
     # Path("/home/eduardo/Data/miscVideos"),
@@ -83,6 +84,7 @@ RELAX_MAX_GRAD = 5.0
 RELAX_MIN_GRAD = -10.0
 STRICT_MAX_GRAD = 1
 STRICT_MIN_GRAD = -0.5
+OFFSET_TIME = 0.0
 
 # RELAX_MAX_GRAD = np.inf
 # RELAX_MIN_GRAD = -RELAX_MAX_GRAD
@@ -98,10 +100,6 @@ DEFAULT_CANNY_PARAMS = {
     "cannyPlateau": 0.1,
     "cannySmoothingKernel": 9,
     "cannyGradientSmoothingKernel": 1,
-    "strictMinGrad": STRICT_MIN_GRAD,
-    "strictMaxGrad": STRICT_MAX_GRAD,
-    "relaxMinGrad": RELAX_MIN_GRAD,
-    "relaxMaxGrad": RELAX_MAX_GRAD,
     "indexOffset": 0,
 }
 DEFAULT_LAPLACIAN_PARAMS = {
@@ -112,11 +110,14 @@ DEFAULT_LAPLACIAN_PARAMS = {
     "laplacianPlateau": 2.0,
     "laplacianSmoothingKernel": 19,
     "laplacianGradientSmoothingKernel": 3,
+    "indexOffset": 0,
+}
+DEFAULT_CRT_INTERVAL_PARAMS = {
     "strictMinGrad": STRICT_MIN_GRAD,
     "strictMaxGrad": STRICT_MAX_GRAD,
     "relaxMinGrad": RELAX_MIN_GRAD,
     "relaxMaxGrad": RELAX_MAX_GRAD,
-    "indexOffset": 0,
+    "offsetTime": OFFSET_TIME,
 }
 
 
@@ -146,6 +147,11 @@ LAPLACIAN_PARAMS = loadOptimizedParamsToml(
     OPTIMIZED_LAPLACIAN_PARAMS_PATH,
     DEFAULT_LAPLACIAN_PARAMS,
     required=FILTER_TYPE == "laplacian",
+)
+CRT_INTERVAL_PARAMS = loadOptimizedParamsToml(
+    OPTIMIZED_CRT_INTERVAL_PARAMS_PATH,
+    DEFAULT_CRT_INTERVAL_PARAMS,
+    required=True,
 )
 params = CANNY_PARAMS if FILTER_TYPE == "canny" else LAPLACIAN_PARAMS
 
@@ -326,7 +332,13 @@ def measureMetricsFrame(LFrame, params, filterType=FILTER_TYPE, show=False):
 # }}}
 
 
-def selectFrames(videoPath, params, filterType=FILTER_TYPE, show=False):
+def selectFrames(
+    videoPath,
+    params,
+    crtIntervalParams=CRT_INTERVAL_PARAMS,
+    filterType=FILTER_TYPE,
+    show=False,
+):
     # {{{
     assert isinstance(videoPath, Path)
     metricList = []
@@ -353,10 +365,11 @@ def selectFrames(videoPath, params, filterType=FILTER_TYPE, show=False):
                 avgAArr,
                 timesScdsArr,
                 releaseIndex,
-                releaseParams["strictMinGrad"],
-                releaseParams["strictMaxGrad"],
-                releaseParams["relaxMinGrad"],
-                releaseParams["relaxMaxGrad"],
+                crtIntervalParams["strictMinGrad"],
+                crtIntervalParams["strictMaxGrad"],
+                crtIntervalParams["relaxMinGrad"],
+                crtIntervalParams["relaxMaxGrad"],
+                offsetTime=crtIntervalParams.get("offsetTime", 0.0),
             )
         )
     except Exception as err:
@@ -379,7 +392,12 @@ def selectFrames(videoPath, params, filterType=FILTER_TYPE, show=False):
 
     # if show:
     plotVisualization(
-        videoPath, metricArr, params, filterType=filterType, indices=indices
+        videoPath,
+        metricArr,
+        params,
+        crtIntervalParams=crtIntervalParams,
+        filterType=filterType,
+        indices=indices,
     )
 
     return indices
@@ -392,6 +410,7 @@ def plotVisualization(
     videoPath,
     metricArr,
     params,
+    crtIntervalParams=CRT_INTERVAL_PARAMS,
     filterType=FILTER_TYPE,
     indices=None,
     error=None,
@@ -515,7 +534,7 @@ def plotVisualization(
             timesScdsArr,
             crtIntervalStartLocalIndex,
             crtIntervalEndLocalIndex,
-            releaseParams,
+            crtIntervalParams,
         )
     except Exception as err:
         print(f"{videoPath.stem}: A-gradient diagnostics failed: {err}")
@@ -736,6 +755,7 @@ def main():
         indices = selectFrames(
             testVideo,
             params,
+            CRT_INTERVAL_PARAMS,
             filterType=FILTER_TYPE,
             show=True,
         )
