@@ -31,8 +31,8 @@ VIDEO_EXTENSIONS = [".MOV", ".wmv", ".mp4"]
 VIDEO_EXTENSIONS_LOWER = {suffix.lower() for suffix in VIDEO_EXTENSIONS}
 
 # Top-level knobs for quick experimentation.
-N_RESTARTS = 20
-N_TRIALS_PER_RESTART = 100
+N_RESTARTS = 50
+N_TRIALS_PER_RESTART = 200
 VALIDATION_VIDEO_RATIO = 0.2
 OPTIMIZATION_VIDEO_RATIO = 0.8
 OPTUNA_TIMEOUT = None
@@ -732,14 +732,39 @@ def runRestart(restartIndex, targetVideos, validationSet, validationCache, rng, 
     finally:
         objective.close()
 
-    bestParams = {**FIXED_LAPLACIAN_PARAMS, **dict(study.best_trial.params)}
+    completedTrials = [
+        trial
+        for trial in study.trials
+        if trial.state == optuna.trial.TrialState.COMPLETE
+    ]
+    if not completedTrials:
+        raise RuntimeError(f"Restart {restartIndex} completed no trials.")
+
+    bestTrial = None
+    bestParams = None
+    validationMetrics = None
+    bestValidationValue = np.inf
+    for candidateTrial in completedTrials:
+        candidateParams = {**FIXED_LAPLACIAN_PARAMS, **dict(candidateTrial.params)}
+        candidateValidationMetrics = evaluateParams(
+            candidateParams,
+            validationCache,
+            verbose=False,
+        )
+        candidateValidationValue = candidateValidationMetrics[VALIDATION_METRIC]
+        if candidateValidationValue < bestValidationValue:
+            bestValidationValue = candidateValidationValue
+            bestTrial = candidateTrial
+            bestParams = candidateParams
+            validationMetrics = candidateValidationMetrics
+
     optimizationMetrics = evaluateParams(bestParams, optimizationCache, verbose=False)
-    validationMetrics = evaluateParams(bestParams, validationCache, verbose=False)
     validationValue = validationMetrics[VALIDATION_METRIC]
 
     print(
         f"restart={restartIndex} "
-        f"best_trial={study.best_trial.number} "
+        f"best_trial={bestTrial.number} "
+        f"best_trial_selection=validation "
         f"optimization_{VALIDATION_METRIC}={optimizationMetrics[VALIDATION_METRIC]:.6f} "
         f"validation_{VALIDATION_METRIC}={validationValue:.6f} "
         f"validation_mae_s={validationMetrics['mae_s']:.6f} "
@@ -751,6 +776,7 @@ def runRestart(restartIndex, targetVideos, validationSet, validationCache, rng, 
     return {
         "restart": restartIndex,
         "study": study,
+        "best_trial": int(bestTrial.number),
         "optimization_set": optimizationSet,
         "initial_params": initialParams,
         "params": bestParams,
@@ -931,7 +957,7 @@ def writeOptimizedParamsToml(
     for record in restartRecords:
         appendTableArray(lines, "restarts_summary")
         lines.append(f"restart = {tomlValue(record['restart'])}")
-        lines.append(f"best_trial = {tomlValue(record['study'].best_trial.number)}")
+        lines.append(f"best_trial = {tomlValue(record['best_trial'])}")
         lines.append(
             f"optimization_{VALIDATION_METRIC} = "
             f"{tomlValue(record['optimization_metrics'][VALIDATION_METRIC])}"
@@ -939,6 +965,10 @@ def writeOptimizedParamsToml(
         lines.append(
             f"validation_{VALIDATION_METRIC} = "
             f"{tomlValue(record['validation_metrics'][VALIDATION_METRIC])}"
+        )
+        lines.append(
+            f"all_{VALIDATION_METRIC} = "
+            f"{tomlValue(record['all_metrics'][VALIDATION_METRIC])}"
         )
         lines.append(
             f"validation_success_rate = "
@@ -1022,7 +1052,7 @@ def main():
     )
 
     bestRecord = None
-    bestValidationValue = np.inf
+    bestAllValue = np.inf
     restartRecords = []
     for restartIndex in range(1, args.restarts + 1):
         record = runRestart(
@@ -1033,14 +1063,19 @@ def main():
             rng,
             args,
         )
+        record["all_metrics"] = evaluateTargetVideos(
+            record["params"],
+            targetVideos,
+            verbose=False,
+        )
         restartRecords.append(record)
-        validationValue = record["validation_metrics"][VALIDATION_METRIC]
-        if validationValue < bestValidationValue:
-            bestValidationValue = validationValue
+        allValue = record["all_metrics"][VALIDATION_METRIC]
+        if allValue < bestAllValue:
+            bestAllValue = allValue
             bestRecord = record
             print(
                 f"new_best_restart={restartIndex} "
-                f"validation_{VALIDATION_METRIC}={validationValue:.6f}",
+                f"all_{VALIDATION_METRIC}={allValue:.6f}",
                 flush=True,
             )
 

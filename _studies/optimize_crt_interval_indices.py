@@ -28,8 +28,8 @@ VIDEO_EXTENSIONS = [".MOV", ".wmv", ".mp4"]
 VIDEO_EXTENSIONS_LOWER = {suffix.lower() for suffix in VIDEO_EXTENSIONS}
 
 # Top-level knobs for quick experimentation.
-N_REPEATS = 20
-N_TRIALS_PER_REPEAT = 100
+N_REPEATS = 50
+N_TRIALS_PER_REPEAT = 200
 VALIDATION_VIDEO_RATIO = 50 / 191
 OPTIMIZATION_VIDEO_RATIO = 66 / 191
 OPTUNA_TIMEOUT = None
@@ -896,14 +896,41 @@ def runRepeat(
     finally:
         objective.close()
 
-    bestParams = dict(study.best_trial.user_attrs["params"])
+    completedTrials = [
+        trial
+        for trial in study.trials
+        if trial.state == optuna.trial.TrialState.COMPLETE
+    ]
+    if not completedTrials:
+        raise RuntimeError(f"Repeat {repeatIndex} completed no trials.")
+
+    bestTrial = None
+    bestParams = None
+    validationMetrics = None
+    bestValidationValue = np.inf
+    for candidateTrial in completedTrials:
+        candidateParams = dict(
+            candidateTrial.user_attrs.get("params", candidateTrial.params)
+        )
+        candidateValidationMetrics = evaluateParams(
+            candidateParams,
+            validationCache,
+            verbose=False,
+        )
+        candidateValidationValue = candidateValidationMetrics[VALIDATION_METRIC]
+        if candidateValidationValue < bestValidationValue:
+            bestValidationValue = candidateValidationValue
+            bestTrial = candidateTrial
+            bestParams = candidateParams
+            validationMetrics = candidateValidationMetrics
+
     optimizationMetrics = evaluateParams(bestParams, optimizationCache, verbose=False)
-    validationMetrics = evaluateParams(bestParams, validationCache, verbose=False)
     validationValue = validationMetrics[VALIDATION_METRIC]
 
     print(
         f"repeat={repeatIndex} "
-        f"best_trial={study.best_trial.number} "
+        f"best_trial={bestTrial.number} "
+        f"best_trial_selection=validation "
         f"optimization_{VALIDATION_METRIC}={optimizationMetrics[VALIDATION_METRIC]:.6f} "
         f"validation_{VALIDATION_METRIC}={validationValue:.6f} "
         f"validation_endpoint_mae_s={validationMetrics['endpoint_mae_s']:.6f} "
@@ -915,6 +942,7 @@ def runRepeat(
     return {
         "repeat": repeatIndex,
         "study": study,
+        "best_trial": int(bestTrial.number),
         "optimization_set": optimizationSet,
         "initial_params": initialParams,
         "params": bestParams,
@@ -1125,7 +1153,7 @@ def writeOptimizedParamsToml(
     for record in repeatRecords:
         appendTableArray(lines, "repeats_summary")
         lines.append(f"repeat = {tomlValue(record['repeat'])}")
-        lines.append(f"best_trial = {tomlValue(record['study'].best_trial.number)}")
+        lines.append(f"best_trial = {tomlValue(record['best_trial'])}")
         lines.append(
             f"optimization_{VALIDATION_METRIC} = "
             f"{tomlValue(record['optimization_metrics'][VALIDATION_METRIC])}"
@@ -1133,6 +1161,10 @@ def writeOptimizedParamsToml(
         lines.append(
             f"validation_{VALIDATION_METRIC} = "
             f"{tomlValue(record['validation_metrics'][VALIDATION_METRIC])}"
+        )
+        lines.append(
+            f"all_{VALIDATION_METRIC} = "
+            f"{tomlValue(record['all_metrics'][VALIDATION_METRIC])}"
         )
         lines.append(
             f"validation_success_rate = "
@@ -1218,7 +1250,7 @@ def main():
     )
 
     bestRecord = None
-    bestValidationValue = np.inf
+    bestAllValue = np.inf
     repeatRecords = []
     for repeatIndex in range(1, args.repeats + 1):
         record = runRepeat(
@@ -1229,14 +1261,19 @@ def main():
             rng,
             args,
         )
+        record["all_metrics"] = evaluateTargetVideos(
+            record["params"],
+            targetVideos,
+            verbose=False,
+        )
         repeatRecords.append(record)
-        validationValue = record["validation_metrics"][VALIDATION_METRIC]
-        if validationValue < bestValidationValue:
-            bestValidationValue = validationValue
+        allValue = record["all_metrics"][VALIDATION_METRIC]
+        if allValue < bestAllValue:
+            bestAllValue = allValue
             bestRecord = record
             print(
                 f"new_best_repeat={repeatIndex} "
-                f"validation_{VALIDATION_METRIC}={validationValue:.6f}",
+                f"all_{VALIDATION_METRIC}={allValue:.6f}",
                 flush=True,
             )
 
