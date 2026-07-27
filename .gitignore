@@ -3,6 +3,14 @@
 *.png
 *.mp4
 *.npz
+*.MOV
+*.jpeg
+*.jpg
+_studies/Npz/
+_studies/Plots/
+_studies/Dump/
+_studies/Frames/
+_studies/TrainingVideos/
 clear_data.py
 
 # Byte-compiled / optimized / DLL files

@@ -1,0 +1,226 @@
+[run]
+seed = 998
+validation_metric = "weighted_rmse_s"
+restarts = 3
+trials_per_restart = 2
+validation_video_count = 50
+validation_max_raquel_masters = 33
+optimization_video_count = 66
+optimization_max_raquel_masters = 44
+cache_dir = "Npz\\Cache"
+
+[best]
+restart = 2
+validation_weighted_rmse_s = 1.997824323880578
+all_weighted_rmse_s = 2.841836622606403
+
+[params]
+thresh1 = 47
+thresh2 = 64
+blurKernel = 5
+l2grad = true
+cannyPlateau = 8.261879165862927
+cannySmoothingKernel = 1
+cannyGradientSmoothingKernel = 3
+indexOffset = 2
+
+[performance.validation]
+video_count = 50
+failure_count = 0
+success_rate = 1.0
+mae_s = 0.6131686666666666
+rmse_s = 1.997824323880578
+max_abs_error_s = 11.343
+weighted_mae_s = 0.6131686666666666
+weighted_rmse_s = 1.997824323880578
+weighted_max_abs_error_s = 11.343
+mae_frames = 14.9
+rmse_frames = 47.757093713918565
+max_abs_error_frames = 271.0
+
+[performance.all]
+video_count = 191
+failure_count = 0
+success_rate = 1.0
+mae_s = 0.8420792321116928
+rmse_s = 2.841836622606403
+max_abs_error_s = 14.094999999999999
+weighted_mae_s = 0.8420792321116928
+weighted_rmse_s = 2.841836622606403
+weighted_max_abs_error_s = 14.094999999999999
+mae_frames = 20.230366492146597
+rmse_frames = 67.91008838686666
+max_abs_error_frames = 337.0
+
+[performance.datasets.other]
+video_count = 39
+failure_count = 0
+success_rate = 1.0
+mae_s = 0.08049059829059839
+rmse_s = 0.09754938408920046
+max_abs_error_s = 0.2666666666666666
+weighted_mae_s = 0.08049059829059839
+weighted_rmse_s = 0.09754938408920046
+weighted_max_abs_error_s = 0.2666666666666666
+mae_frames = 2.4871794871794872
+rmse_frames = 3.033995419430986
+max_abs_error_frames = 8.0
+
+[performance.datasets.raquelMasters]
+video_count = 152
+failure_count = 0
+success_rate = 1.0
+mae_s = 1.0374868421052632
+rmse_s = 3.18523695722692
+max_abs_error_s = 14.094999999999999
+weighted_mae_s = 1.0374868421052632
+weighted_rmse_s = 3.18523695722692
+weighted_max_abs_error_s = 14.094999999999999
+mae_frames = 24.782894736842106
+rmse_frames = 76.10981505278029
+max_abs_error_frames = 337.0
+
+[selection.validation]
+videos = [
+  "DSC_0069.MOV",
+  "0528_test4.6.mp4",
+  "P12CR5.wmv",
+  "P25CR2.wmv",
+  "P08CR4.wmv",
+  "P10CR4.wmv",
+  "P29CR1.wmv",
+  "P08CR3.wmv",
+  "P16CR2.wmv",
+  "Video 151.mp4",
+  "P25CR4.wmv",
+  "experiment 1.wmv",
+  "CRT3.mp4",
+  "v1.mp4",
+  "P14CR1.wmv",
+  "P16CR1.wmv",
+  "P20CR5.wmv",
+  "P30CR5.wmv",
+  "P06CR5.wmv",
+  "P31CR4.wmv",
+  "P17CR5.wmv",
+  "P09CR4.wmv",
+  "P01CR4.wmv",
+  "P11CR1.wmv",
+  "experiment 4.wmv",
+  "P11CR4.wmv",
+  "P15CR5.wmv",
+  "experiment 2.wmv",
+  "0528_test3.6.mp4",
+  "P23CR1.wmv",
+  "0528_test3.2.mp4",
+  "P23CR5.wmv",
+  "P03CR3.wmv",
+  "P28CR4.wmv",
+  "P24CR5.wmv",
+  "P17CR3.wmv",
+  "P04CR4.wmv",
+  "0528_test3.5.mp4",
+  "0528_test2.4.mp4",
+  "P24CR1.wmv",
+  "P25CR3.wmv",
+  "0528_test1.2.mp4",
+  "0528_test4.5.mp4",
+  "0528_test2.5.mp4",
+  "P22CR4.wmv",
+  "P15CR3.wmv",
+  "Video 154.mp4",
+  "P09CR5.wmv",
+  "P24CR2.wmv",
+  "0528_test1.4.mp4",
+]
+
+[selection.best_optimization]
+videos = [
+  "P01CR5.wmv",
+  "P19CR1.wmv",
+  "P23CR2.wmv",
+  "P19CR3.wmv",
+  "0528_test4.2.mp4",
+  "P30CR1.wmv",
+  "Video 145.mp4",
+  "P06CR3.wmv",
+  "P10CR1.wmv",
+  "P14CR3.wmv",
+  "P29CR2.wmv",
+  "0528_test3.3.mp4",
+  "Video 157.mp4",
+  "P16CR3.wmv",
+  "P01CR1.wmv",
+  "P19CR2.wmv",
+  "P18CR5.wmv",
+  "Video 142.mp4",
+  "P20CR3.wmv",
+  "0528_test1.3.mp4",
+  "P12CR1.wmv",
+  "0528_test2.3.mp4",
+  "P28CR2.wmv",
+  "0528_test3.1.mp4",
+  "P30CR2.wmv",
+  "0528_test1.1.mp4",
+  "P12CR3.wmv",
+  "P06CR1.wmv",
+  "P09CR2.wmv",
+  "P03CR5.wmv",
+  "0528_test4.3.mp4",
+  "P16CR4.wmv",
+  "video.mp4",
+  "CRT2.mp4",
+  "P23CR4.wmv",
+  "0528_test1.6.mp4",
+  "P29CR3.wmv",
+  "experiment 3.mp4",
+  "0528_test2.1.mp4",
+  "P17CR4.wmv",
+  "CRT1.mp4",
+  "P07CR5.wmv",
+  "P11CR2.wmv",
+  "P29CR5.wmv",
+  "P08CR2.wmv",
+  "P31CR1.wmv",
+  "P22CR5.wmv",
+  "P30CR3.wmv",
+  "Video 148.mp4",
+  "0528_test4.1.mp4",
+  "0528_test3.4.mp4",
+  "P25CR5.wmv",
+  "P21CR5.wmv",
+  "P22CR3.wmv",
+  "P04CR3.wmv",
+  "P07CR1.wmv",
+  "P20CR1.wmv",
+  "P05CR4.wmv",
+  "0528_test1.5.mp4",
+  "P28CR3.wmv",
+  "0528_test2.2.mp4",
+  "P27CR3.wmv",
+  "P26CR5.wmv",
+  "P18CR4.wmv",
+  "P15CR1.wmv",
+  "0528_test4.4.mp4",
+]
+
+[[restarts_summary]]
+restart = 1
+best_trial = 1
+optimization_weighted_rmse_s = 4.210757227765388
+validation_weighted_rmse_s = 5.232152842299085
+validation_success_rate = 1.0
+
+[[restarts_summary]]
+restart = 2
+best_trial = 1
+optimization_weighted_rmse_s = 2.6550341034066824
+validation_weighted_rmse_s = 1.997824323880578
+validation_success_rate = 1.0
+
+[[restarts_summary]]
+restart = 3
+best_trial = 0
+optimization_weighted_rmse_s = 4.937043669862695
+validation_weighted_rmse_s = 141.50466734631175
+validation_success_rate = 0.98
