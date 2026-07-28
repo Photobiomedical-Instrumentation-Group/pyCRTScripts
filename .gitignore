@@ -6,6 +6,7 @@
 *.MOV
 *.jpeg
 *.jpg
+*.txt
 _studies/Npz/
 _studies/Plots/
 _studies/Dump/

@@ -43,24 +43,25 @@ OPTIMIZED_CRT_INTERVAL_PARAMS_PATH = Path("optimized_params_crt_interval.toml")
 
 VIDEOS_DIR_LIST = [
     # Path("/home/eduardo/Data/miscVideos"),
-    # Path("/home/eduardo/Data/raquelMasters"),
-    Path("/home/eduardo/Data/yutaoNewEquipment"),
+    Path("/home/eduardo/Data/raquelMasters"),
+    # Path("/home/eduardo/Data/yutaoNewEquipment"),
     # Path("/home/eduardo/Data/yutaoPostNew"),
     # Path("TrainingVideos"),
 ]
 VIDEO_EXTENSIONS = [".MOV", ".wmv", ".mp4"]
 problem_paths = [
     # Path("TrainingVideos") / "experiment 2.wmv",
-    Path("/home/eduardo/Data/raquelMasters") / "P01CR3.wmv",
-    Path("/home/eduardo/Data/raquelMasters") / "P01CR4.wmv",
-    Path("/home/eduardo/Data/raquelMasters") / "P02CR1.wmv",
-    Path("/home/eduardo/Data/raquelMasters") / "P02CR4.wmv",
-    Path("/home/eduardo/Data/raquelMasters") / "P02CR5.wmv",
+    # Path("/home/eduardo/Data/raquelMasters") / "P01CR3.wmv",
+    # Path("/home/eduardo/Data/raquelMasters") / "P01CR4.wmv",
+    # Path("/home/eduardo/Data/raquelMasters") / "P02CR1.wmv",
+    # Path("/home/eduardo/Data/raquelMasters") / "P02CR4.wmv",
     # Path("/home/eduardo/Data/raquelMasters") / "P02CR5.wmv",
+    # Path("/home/eduardo/Data/raquelMasters") / "P02CR5.wmv",
+    Path("../Videos/P09CR3.wmv"),
 ]
-# RUN_ON = problem_paths
-RUN_ON = VIDEOS_DIR_LIST
-FILTER_TYPE = "canny"
+RUN_ON = problem_paths
+# RUN_ON = VIDEOS_DIR_LIST
+FILTER_TYPE = "laplacian"
 # FILTER_TYPE = "laplacian"
 
 
