@@ -20,7 +20,9 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 CACHE_DIR = SCRIPT_DIR / "Npz/Cache"
 RELEASE_TARGETS_PATH = SCRIPT_DIR / "target_frames.toml"
 INTERVAL_TARGETS_PATH = SCRIPT_DIR / "crt_interval_targets.toml"
+OPTIMIZER_TYPE = "crt_interval_indices"
 OUTPUT_PATH = SCRIPT_DIR / "optimized_params_crt_interval.toml"
+PROGRESS_CACHE_PATH = SCRIPT_DIR / "Npz/crt_interval_indices_cache.json"
 
 RAQUEL_MASTERS_DATASET = "raquelMasters"
 OTHER_DATASET = "other"
@@ -1085,6 +1087,215 @@ def appendMetrics(lines, metrics):
         lines.append(f"{key} = {tomlValue(metrics[key])}")
 
 
+
+def jsonSafeValue(value):
+    if isinstance(value, (str, bool)) or value is None:
+        return value
+    if isinstance(value, (int, np.integer)):
+        return int(value)
+    if isinstance(value, (float, np.floating)):
+        return float(value) if np.isfinite(value) else str(float(value))
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, np.ndarray):
+        return [jsonSafeValue(item) for item in value.tolist()]
+    if isinstance(value, dict):
+        return {str(key): jsonSafeValue(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [jsonSafeValue(item) for item in value]
+    return str(value)
+
+
+def targetVideoNames(targetVideos):
+    return [targetVideo.videoPath.name for targetVideo in targetVideos]
+
+
+def compactMetrics(metrics):
+    if "endpoint_mae_s" in metrics:
+        maeSeconds = metrics["endpoint_mae_s"]
+        maeFrames = metrics["endpoint_mae_frames"]
+        maxAbsSeconds = metrics["endpoint_max_abs_error_s"]
+        maxAbsFrames = metrics["endpoint_max_abs_error_frames"]
+    else:
+        maeSeconds = metrics["mae_s"]
+        maeFrames = metrics["mae_frames"]
+        maxAbsSeconds = metrics["max_abs_error_s"]
+        maxAbsFrames = metrics["max_abs_error_frames"]
+
+    return {
+        "success_rate": jsonSafeValue(metrics["success_rate"]),
+        "mae_s": jsonSafeValue(maeSeconds),
+        "mae_frames": jsonSafeValue(maeFrames),
+        "max_abs_error_s": jsonSafeValue(maxAbsSeconds),
+        "max_abs_error_frames": jsonSafeValue(maxAbsFrames),
+    }
+
+
+def metricLossValue(metrics):
+    if VALIDATION_METRIC in metrics:
+        return float(metrics[VALIDATION_METRIC])
+    return float(metrics["mae_s"])
+
+
+def summarizeRepeatRecord(record):
+    return {
+        "repeat": int(record["repeat"]),
+        "best_trial": int(record["best_trial"]),
+        "params": jsonSafeValue(record["params"]),
+        **compactMetrics(record["validation_metrics"]),
+    }
+
+
+def writeProgressCache(
+    cachePath,
+    args,
+    targetVideos,
+    validationSet,
+    repeatRecords,
+    bestRecord,
+    seed,
+):
+    cachePath.parent.mkdir(parents=True, exist_ok=True)
+    metadata = {
+        "optimizer_type": OPTIMIZER_TYPE,
+        "seed": int(seed),
+        "validation_metric": VALIDATION_METRIC,
+        "repeats_requested": int(args.repeats),
+        "trials_per_repeat": int(args.n_trials),
+        "repeats_completed": len(repeatRecords),
+        "validation_video_ratio": VALIDATION_VIDEO_RATIO,
+        "optimization_video_ratio": OPTIMIZATION_VIDEO_RATIO,
+        "cache_dir": CACHE_DIR,
+        "target_count": len(targetVideos),
+        "validation_count": len(validationSet),
+    }
+    records = mergeProgressRecords(
+        loadExistingProgressRecords(cachePath, "repeat_records"),
+        [summarizeRepeatRecord(record) for record in repeatRecords],
+        "repeat",
+    )
+    metadata["repeats_completed"] = len(records)
+    bestSummary = bestCompactRecordFromRecords(records)
+    payload = {
+        "metadata": metadata,
+        "target_videos": targetVideoNames(targetVideos),
+        "validation_videos": targetVideoNames(validationSet),
+        "best_record": bestSummary,
+        "repeat_records": records,
+    }
+    cachePath.write_text(
+        json.dumps(jsonSafeValue(payload), indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+
+
+def loadExistingProgressRecords(cachePath, recordsKey):
+    if not cachePath.exists():
+        return []
+    with cachePath.open("r", encoding="utf-8") as file:
+        payload = json.load(file)
+    return [dict(record) for record in payload.get(recordsKey, [])]
+
+
+def mergeProgressRecords(existingRecords, newRecords, indexKey):
+    merged = {int(record[indexKey]): dict(record) for record in existingRecords}
+    for record in newRecords:
+        merged[int(record[indexKey])] = dict(record)
+    return [merged[index] for index in sorted(merged)]
+
+
+def bestCompactRecordFromRecords(records):
+    bestRecord = None
+    bestValue = np.inf
+    for record in records:
+        value = metricLossValue(record)
+        if value < bestValue:
+            bestValue = value
+            bestRecord = record
+    return bestRecord
+
+
+def loadProgressRecordCount(cachePath, recordsKey):
+    return len(loadExistingProgressRecords(cachePath, recordsKey))
+
+
+def hydrateRepeatRecord(record):
+    compact = dict(record.get("all_metrics", record))
+    metrics = compactMetrics(compact)
+    return {
+        "repeat": int(record["repeat"]),
+        "best_trial": int(record["best_trial"]),
+        "params": dict(record["params"]),
+        "optimization_metrics": metrics,
+        "validation_metrics": metrics,
+        "all_metrics": metrics,
+        "optimization_set": [],
+    }
+
+
+def loadProgressCache(cachePath, targetVideos, validationSet, seed):
+    if not cachePath.exists():
+        return []
+
+    with cachePath.open("r", encoding="utf-8") as file:
+        payload = json.load(file)
+
+    metadata = payload.get("metadata", {})
+    if metadata.get("optimizer_type") != OPTIMIZER_TYPE:
+        raise ValueError(
+            f"Progress cache {cachePath} has optimizer_type="
+            f"{metadata.get('optimizer_type')!r}, expected {OPTIMIZER_TYPE!r}."
+        )
+    if int(metadata.get("seed", seed)) != int(seed):
+        raise ValueError(
+            f"Progress cache {cachePath} was created with seed "
+            f"{metadata.get('seed')}, but this run uses seed {seed}."
+        )
+
+    expectedValidationVideos = targetVideoNames(validationSet)
+    cachedValidationVideos = payload.get("validation_videos", [])
+    if cachedValidationVideos != expectedValidationVideos:
+        raise ValueError(
+            f"Progress cache {cachePath} validation split does not match this run. "
+            "Use the same seed/split settings or remove the cache file."
+        )
+
+    records = [
+        hydrateRepeatRecord(record)
+        for record in payload.get("repeat_records", [])
+    ]
+    records.sort(key=lambda record: record["repeat"])
+    return records
+
+
+
+def refreshLoadedRecordMetrics(records, validationCache, targetVideos):
+    for record in records:
+        record["validation_metrics"] = evaluateParams(
+            record["params"],
+            validationCache,
+            verbose=False,
+        )
+        record["all_metrics"] = evaluateTargetVideos(
+            record["params"],
+            targetVideos,
+            verbose=False,
+        )
+    return records
+
+
+def bestRecordFromRecords(records):
+    bestRecord = None
+    bestAllValue = np.inf
+    for record in records:
+        allValue = metricLossValue(record["all_metrics"])
+        if allValue < bestAllValue:
+            bestAllValue = allValue
+            bestRecord = record
+    return bestRecord, bestAllValue
+
+
 def writeOptimizedParamsToml(
     outputPath,
     bestRecord,
@@ -1156,15 +1367,15 @@ def writeOptimizedParamsToml(
         lines.append(f"best_trial = {tomlValue(record['best_trial'])}")
         lines.append(
             f"optimization_{VALIDATION_METRIC} = "
-            f"{tomlValue(record['optimization_metrics'][VALIDATION_METRIC])}"
+            f"{tomlValue(metricLossValue(record['optimization_metrics']))}"
         )
         lines.append(
             f"validation_{VALIDATION_METRIC} = "
-            f"{tomlValue(record['validation_metrics'][VALIDATION_METRIC])}"
+            f"{tomlValue(metricLossValue(record['validation_metrics']))}"
         )
         lines.append(
             f"all_{VALIDATION_METRIC} = "
-            f"{tomlValue(record['all_metrics'][VALIDATION_METRIC])}"
+            f"{tomlValue(metricLossValue(record['all_metrics']))}"
         )
         lines.append(
             f"validation_success_rate = "
@@ -1249,10 +1460,19 @@ def main():
         flush=True,
     )
 
-    bestRecord = None
-    bestAllValue = np.inf
+    completedRepeatCount = min(
+        loadProgressRecordCount(PROGRESS_CACHE_PATH, "repeat_records"),
+        args.repeats,
+    )
     repeatRecords = []
-    for repeatIndex in range(1, args.repeats + 1):
+    if completedRepeatCount:
+        print(
+            f"resuming from {relativeToScript(PROGRESS_CACHE_PATH)}: "
+            f"completed_repeats={completedRepeatCount}",
+            flush=True,
+        )
+
+    for repeatIndex in range(completedRepeatCount + 1, args.repeats + 1):
         record = runRepeat(
             repeatIndex,
             targetVideos,
@@ -1267,18 +1487,41 @@ def main():
             verbose=False,
         )
         repeatRecords.append(record)
-        allValue = record["all_metrics"][VALIDATION_METRIC]
-        if allValue < bestAllValue:
-            bestAllValue = allValue
-            bestRecord = record
-            print(
-                f"new_best_repeat={repeatIndex} "
-                f"all_{VALIDATION_METRIC}={allValue:.6f}",
-                flush=True,
-            )
+        writeProgressCache(
+            PROGRESS_CACHE_PATH,
+            args,
+            targetVideos,
+            validationSet,
+            repeatRecords,
+            record,
+            args.seed,
+        )
+        print(
+            f"wrote progress cache {relativeToScript(PROGRESS_CACHE_PATH)}",
+            flush=True,
+        )
 
+    repeatRecords = loadProgressCache(
+        PROGRESS_CACHE_PATH,
+        targetVideos,
+        validationSet,
+        args.seed,
+    )
+    if len(repeatRecords) > args.repeats:
+        repeatRecords = repeatRecords[: args.repeats]
+    repeatRecords = refreshLoadedRecordMetrics(
+        repeatRecords,
+        validationCache,
+        targetVideos,
+    )
+    bestRecord, bestAllValue = bestRecordFromRecords(repeatRecords)
     if bestRecord is None:
         raise RuntimeError("No repeat completed successfully.")
+    print(
+        f"selected_best_repeat={bestRecord['repeat']} "
+        f"all_{VALIDATION_METRIC}={bestAllValue:.6f}",
+        flush=True,
+    )
 
     finalPerformance = evaluateAllDatasets(
         bestRecord["params"],
