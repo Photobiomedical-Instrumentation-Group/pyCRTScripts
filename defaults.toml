@@ -21,6 +21,7 @@ sliceMethod = "from local max"
 exclusionMethod = "first positive peak"
 exclusionCriteria = inf
 initialGuesses = [1.0, -0.5, 0.0]
+maxUncertaintyRatio = inf
 
 [General]
 logLevel = "DEBUG"

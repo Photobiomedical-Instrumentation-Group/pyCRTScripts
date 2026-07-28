@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime
 from logging.handlers import RotatingFileHandler
@@ -201,12 +202,50 @@ def calculateCrt90_10Details(
 # }}}
 
 
+def validateUncertaintyRatio(
+    metricName: str,
+    metricValue: float,
+    uncertainty: float,
+    maxUncertaintyRatio: float,
+) -> float:
+    # {{{
+    metricValue = float(metricValue)
+    uncertainty = float(uncertainty)
+    maxUncertaintyRatio = float(maxUncertaintyRatio)
+
+    if np.isnan(uncertainty):
+        raise ValueError(f"{metricName} uncertainty is NaN.")
+    if not np.isfinite(uncertainty) or uncertainty < 0:
+        raise ValueError(
+            f"{metricName} uncertainty must be finite and non-negative: "
+            f"{uncertainty}."
+        )
+    if not np.isfinite(metricValue) or metricValue == 0:
+        raise ValueError(
+            f"{metricName} value must be finite and non-zero to calculate "
+            f"relative uncertainty: {metricValue}."
+        )
+
+    uncertaintyRatio = abs(uncertainty / metricValue)
+    if uncertaintyRatio > maxUncertaintyRatio:
+        raise ValueError(
+            f"{metricName} relative uncertainty {uncertaintyRatio:.6g} exceeds "
+            f"maxUncertaintyRatio {maxUncertaintyRatio:.6g}."
+        )
+
+    return float(uncertaintyRatio)
+
+
+# }}}
+
+
 def calculatePcrtDetails(
     signalArr: np.ndarray,
     timeArr: np.ndarray,
     crtIntervalStartIndex: int,
     startIndex: int,
     crtIntervalEndIndex: int,
+    maxUncertaintyRatio: float = np.inf,
 ) -> dict[str, Any]:
     # {{{
     intervalValues = signalArr[crtIntervalStartIndex:crtIntervalEndIndex]
@@ -220,12 +259,19 @@ def calculatePcrtDetails(
     fitValues = (fitValues - referenceMin) / referenceRange
     pcrtTuple, criticalTime = calcPCRTFirstPositivePeak(fitTimes, fitValues)
     pcrtValue, pcrtUncertainty = pCRTFromParameters(pcrtTuple)
+    uncertaintyRatio = validateUncertaintyRatio(
+        "pCRT",
+        pcrtValue,
+        pcrtUncertainty,
+        maxUncertaintyRatio,
+    )
     pcrtParams, _ = pcrtTuple
     fitValues = exponential(fitTimes, *pcrtParams) * referenceRange + referenceMin
 
     return {
         "pcrt": float(pcrtValue),
         "pcrtUncertainty": float(pcrtUncertainty),
+        "pcrtUncertaintyRatio": float(uncertaintyRatio),
         "criticalTime": float(criticalTime + timeArr[startIndex]),
         "fitTimes": fitTimes + timeArr[startIndex],
         "fitValues": fitValues,
@@ -639,6 +685,10 @@ def measureCRTVideoFromConfig(
             crtIntervalStartIndex,
             startIndex,
             crtIntervalEndIndex,
+            maxUncertaintyRatio=configDict["Measurement"].get(
+                "maxUncertaintyRatio",
+                np.inf,
+            ),
         )
     except Exception as err:
         if showPlots:
@@ -663,9 +713,12 @@ def measureCRTVideoFromConfig(
         "videoPath": str(videoPath),
         "roi": roi,
         "releaseIndex": int(releaseIndex),
+        "releaseTime": float(timeArr[releaseIndex]),
         "crtIntervalStartIndex": int(crtIntervalStartIndex),
         "startIndex": int(startIndex),
         "crtIntervalEndIndex": int(crtIntervalEndIndex),
+        "measurementTime": datetime.now().strftime(DATETIME_FORMAT),
+        "releaseParams": releaseParams,
         "metrics": metrics,
         "metricDetails": metricDetails,
         "metricErrors": metricErrors,
@@ -1128,6 +1181,7 @@ def calculateCrtMetrics(
     crtIntervalStartIndex: int,
     startIndex: int,
     crtIntervalEndIndex: int,
+    maxUncertaintyRatio: float = np.inf,
 ) -> tuple[
     dict[str, tuple[float, float]],
     dict[str, dict[str, Any]],
@@ -1165,6 +1219,7 @@ def calculateCrtMetrics(
                 crtIntervalStartIndex,
                 startIndex,
                 crtIntervalEndIndex,
+                maxUncertaintyRatio=maxUncertaintyRatio,
             )
         except Exception as err:
             errors[pcrtKey] = str(err)
@@ -1235,11 +1290,21 @@ def calculateCrtMetrics(
         except Exception as err:
             errors[crt90Key] = str(err)
         else:
+            crt90Uncertainty = float((ci95[1] - ci95[0]) / 2)
+            uncertaintyRatio = validateUncertaintyRatio(
+                "CRT90_10",
+                crt90Value,
+                crt90Uncertainty,
+                maxUncertaintyRatio,
+            )
             result[crt90Key] = (
                 float(crt90Value),
-                float((ci95[1] - ci95[0]) / 2),
+                crt90Uncertainty,
             )
-            details[crt90Key] = crt90
+            details[crt90Key] = {
+                **crt90,
+                "crt90_10UncertaintyRatio": float(uncertaintyRatio),
+            }
 
     if len(result) == 0:
         errorSummary = "; ".join(
@@ -1309,49 +1374,160 @@ def savePlots(
 # }}}
 
 
+CRT_METRIC_KEYS = (
+    "bgr_g_pcrt",
+    "bgr_g_crt90_10",
+    "lab_a_pcrt",
+    "lab_a_crt90_10",
+)
+
+
+def metricColumnPrefix(metricKey: str) -> str:
+    # {{{
+    return metricKey
+
+
+# }}}
+
+
+def measurementVideoName(
+    measurement: dict[str, Any],
+    videoName: str | None = None,
+) -> str:
+    # {{{
+    if videoName is not None:
+        return str(videoName)
+    videoPath = measurement.get("videoPath")
+    if videoPath is not None:
+        return Path(videoPath).name
+    return str(measurement.get("videoName", "unknown_video"))
+
+
+# }}}
+
+
+def measurementTimeString(measurement: dict[str, Any]) -> str:
+    # {{{
+    measurementTime = measurement.get("measurementTime")
+    if measurementTime is None:
+        return datetime.now().strftime(DATETIME_FORMAT)
+    if isinstance(measurementTime, datetime):
+        return measurementTime.strftime(DATETIME_FORMAT)
+    return str(measurementTime)
+
+
+# }}}
+
+
+def metricSummaryValues(measurement: dict[str, Any], metricKey: str) -> dict[str, Any]:
+    # {{{
+    metrics = measurement.get("metrics", {})
+    details = measurement.get("metricDetails", {})
+    metricValue = np.nan
+    uncertainty = np.nan
+    if metricKey in metrics:
+        metricValue, uncertainty = metrics[metricKey]
+
+    metricDetails = details.get(metricKey, {})
+    return {
+        "value": float(metricValue) if np.isfinite(metricValue) else np.nan,
+        "uncertainty": float(uncertainty) if np.isfinite(uncertainty) else np.nan,
+        "criticalTime": float(metricDetails.get("criticalTime", np.nan)),
+    }
+
+
+# }}}
+
+
+def measurementCSVColumns() -> list[str]:
+    # {{{
+    columns = ["Video", "releaseTime", "measurementTime"]
+    for metricKey in CRT_METRIC_KEYS:
+        prefix = metricColumnPrefix(metricKey)
+        columns.extend(
+            [
+                prefix,
+                f"{prefix}_uncertainty",
+                f"{prefix}_criticalTime",
+            ]
+        )
+    return columns
+
+
+# }}}
+
+
+def measurementCSVRow(
+    measurement: dict[str, Any],
+    videoName: str | None = None,
+) -> dict[str, Any]:
+    # {{{
+    row = {
+        "Video": measurementVideoName(measurement, videoName),
+        "releaseTime": float(measurement.get("releaseTime", np.nan)),
+        "measurementTime": measurementTimeString(measurement),
+    }
+    for metricKey in CRT_METRIC_KEYS:
+        prefix = metricColumnPrefix(metricKey)
+        summary = metricSummaryValues(measurement, metricKey)
+        row[prefix] = summary["value"]
+        row[f"{prefix}_uncertainty"] = summary["uncertainty"]
+        row[f"{prefix}_criticalTime"] = summary["criticalTime"]
+    return row
+
+
+# }}}
+
+
 def saveCSV(
-    pcrtObj: PCRT,
-    videoName: str,
+    measurement: dict[str, Any],
     csvPath: Path | str,
+    videoName: str | None = None,
     overwrite: bool = False,
     provideXLSX: bool = True,
 ) -> None:
     # {{{
-    colLabels = ["pCRT", "Unc", "RelUnc", "CT", "ExcCri", "ExcMet", "Time"]
-
-    row = {
-        "pCRT": round(float(pcrtObj.pCRT[0]), 3),
-        "Unc": round(float(pcrtObj.pCRT[1]), 3),
-        "RelUnc": round(float(pcrtObj.relativeUncertainty), 3),
-        "CT": round(float(pcrtObj.criticalTime), 3),
-        "ExcCri": pcrtObj.exclusionCriteria,
-        "ExcMet": pcrtObj.exclusionMethod,
-        "Time": pcrtObj.dateTime.strftime(DATETIME_FORMAT),
-    }
-
     csvPath = Path(csvPath)
+    csvPath.parent.mkdir(parents=True, exist_ok=True)
+    row = measurementCSVRow(measurement, videoName)
+    colLabels = measurementCSVColumns()
 
     if csvPath.exists():
-        csvSheet = pd.read_csv(csvPath, sep=",", encoding="utf-8-sig", index_col=0)
+        csvSheet = pd.read_csv(csvPath, sep=",", encoding="utf-8-sig")
+        if "Video" not in csvSheet.columns and len(csvSheet.columns) > 0:
+            firstColumn = csvSheet.columns[0]
+            if str(firstColumn).startswith("Unnamed"):
+                csvSheet = csvSheet.rename(columns={firstColumn: "Video"})
 
-        # validate expected schema
-        if list(csvSheet.columns) != colLabels:
-            raise RuntimeError(f"Could not load {csvPath}. CSV columns are invalid.")
+        for column in colLabels:
+            if column not in csvSheet.columns:
+                csvSheet[column] = np.nan
 
-        if videoName in csvSheet.index and not overwrite:
-            oldVideoName = videoName
-            videoName = findUniqueName(oldVideoName, list(csvSheet.index))
-            LOGGER.info(f"{oldVideoName} found in CSV, saving as {videoName}")
+        extraColumns = [column for column in csvSheet.columns if column not in colLabels]
+        csvSheet = csvSheet[colLabels + extraColumns]
+        if "Video" not in csvSheet:
+            raise RuntimeError(f"Could not load {csvPath}. CSV is missing Video column.")
 
-        csvSheet.loc[videoName, colLabels] = [row[c] for c in colLabels]
-
+        videoNameToSave = row["Video"]
+        matchingRows = csvSheet.index[csvSheet["Video"] == videoNameToSave].tolist()
+        if matchingRows and overwrite:
+            csvSheet.loc[matchingRows[0], colLabels] = [
+                row[column] for column in colLabels
+            ]
+        else:
+            if matchingRows:
+                oldVideoName = videoNameToSave
+                videoNameToSave = findUniqueName(oldVideoName, list(csvSheet["Video"]))
+                row["Video"] = videoNameToSave
+                LOGGER.info(f"{oldVideoName} found in CSV, saving as {videoNameToSave}")
+            csvSheet.loc[len(csvSheet), colLabels] = [row[column] for column in colLabels]
     else:
-        csvSheet = pd.DataFrame([row], index=[videoName], columns=colLabels)
+        csvSheet = pd.DataFrame([row], columns=colLabels)
 
-    csvSheet.to_csv(csvPath, encoding="utf-8-sig")
+    csvSheet.to_csv(csvPath, index=False, encoding="utf-8-sig")
     if provideXLSX:
         xlsxPath = csvPath.with_suffix(".xlsx")
-        csvSheet.to_excel(xlsxPath, index=True, index_label="Name", engine="openpyxl")
+        csvSheet.to_excel(xlsxPath, index=False, engine="openpyxl")
     LOGGER.info(
         f"Saved CRT in {csvPath}" + (f" and in {xlsxPath}" if provideXLSX else "")
     )
@@ -1360,25 +1536,129 @@ def saveCSV(
 # }}}
 
 
+def safeJsonDumps(value: Any) -> str:
+    # {{{
+    def default(obj):
+        if isinstance(obj, Path):
+            return str(obj)
+        if isinstance(obj, np.generic):
+            return obj.item()
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        if isinstance(obj, datetime):
+            return obj.strftime(DATETIME_FORMAT)
+        return str(obj)
+
+    return json.dumps(value, default=default, sort_keys=True)
+
+
+# }}}
+
+
+def measurementNpzData(
+    measurement: dict[str, Any],
+    videoName: str | None = None,
+) -> dict[str, Any]:
+    # {{{
+    timeArr = np.asarray(measurement["timeArr"], dtype=float)
+    labAIntensArr = np.asarray(measurement["labAIntensArr"], dtype=float)
+    bgrGIntensArr = np.asarray(measurement["bgrGIntensArr"], dtype=float)
+    crtIntervalStartIndex = int(measurement["crtIntervalStartIndex"])
+    crtIntervalEndIndex = int(measurement["crtIntervalEndIndex"])
+    intervalSlice = slice(crtIntervalStartIndex, crtIntervalEndIndex)
+
+    data: dict[str, Any] = {
+        "videoName": measurementVideoName(measurement, videoName),
+        "videoPath": str(measurement.get("videoPath", "")),
+        "roi": np.asarray(measurement.get("roi", [])),
+        "measurementTime": measurementTimeString(measurement),
+        "releaseIndex": int(measurement.get("releaseIndex", -1)),
+        "releaseTime": float(measurement.get("releaseTime", np.nan)),
+        "crtIntervalStartIndex": crtIntervalStartIndex,
+        "startIndex": int(measurement.get("startIndex", -1)),
+        "crtIntervalEndIndex": crtIntervalEndIndex,
+        "timeArr": timeArr,
+        "labAIntensArr": labAIntensArr,
+        "bgrGIntensArr": bgrGIntensArr,
+        "slicedTimeArr": timeArr[intervalSlice],
+        "slicedLabAIntensArr": labAIntensArr[intervalSlice],
+        "slicedBgrGIntensArr": bgrGIntensArr[intervalSlice],
+        "releaseParamsJson": safeJsonDumps(measurement.get("releaseParams", {})),
+        "metricErrorsJson": safeJsonDumps(measurement.get("metricErrors", {})),
+    }
+
+    releaseMetricData = measurement.get("releaseMetricData") or {}
+    data["releaseMetricTimes"] = np.asarray(
+        releaseMetricData.get("times", []),
+        dtype=float,
+    )
+    data["releaseMetricValues"] = np.asarray(
+        releaseMetricData.get("values", []),
+        dtype=float,
+    )
+    data["releaseMetricLabel"] = str(releaseMetricData.get("label", ""))
+
+    for metricKey in CRT_METRIC_KEYS:
+        summary = metricSummaryValues(measurement, metricKey)
+        data[metricKey] = summary["value"]
+        data[f"{metricKey}_uncertainty"] = summary["uncertainty"]
+        data[f"{metricKey}_criticalTime"] = summary["criticalTime"]
+
+    return data
+
+
+# }}}
+
+
 def saveNpz(
-    pcrtObj: PCRT,
-    videoName: str,
+    measurement: dict[str, Any],
     npzPath: Path | str,
+    videoName: str | None = None,
     overwrite: bool = False,
 ) -> None:
     # {{{
     npzPath = Path(npzPath)
-    if not npzPath.exists() or not npzPath.is_dir():
-        raise ValueError(f"{npzPath} does not exist or is not a directory.")
-    npzFilePath = npzPath / f"{videoName}.npz"
+    npzPath.mkdir(parents=True, exist_ok=True)
+    if not npzPath.is_dir():
+        raise ValueError(f"{npzPath} is not a directory.")
+
+    npzFilePath = (
+        npzPath / f"{Path(measurementVideoName(measurement, videoName)).stem}.npz"
+    )
     if not overwrite:
         npzFilePath = findUniquePath(npzFilePath)
-    pcrtObj.name = videoName
-    pcrtObj.save(npzFilePath)
-    LOGGER.info(f"pCRT object saved in {npzFilePath}.")
+
+    np.savez_compressed(npzFilePath, **measurementNpzData(measurement, videoName))
+    LOGGER.info(f"CRT measurement data saved in {npzFilePath}.")
 
 
 # }}}
+
+
+def saveMeasurementOutputsFromConfig(
+    measurement: dict[str, Any],
+    configDict: dict[str, Any],
+) -> None:
+    # {{{
+    filesConfig = configDict["Files"]
+    overwrite = bool(filesConfig.get("overwrite", False))
+
+    csvPath = filesConfig.get("csvPath")
+    if csvPath:
+        saveCSV(
+            measurement,
+            csvPath,
+            overwrite=overwrite,
+            provideXLSX=bool(filesConfig.get("provideXLSX", True)),
+        )
+
+    npzPath = filesConfig.get("npzPath")
+    if npzPath:
+        saveNpz(
+            measurement,
+            npzPath,
+            overwrite=overwrite,
+        )
 
 
 def findUniqueName(name: str, nameList: list[str]) -> str:
@@ -1440,6 +1720,7 @@ def singleVideoPipeline(
             configDict,
             savePlot=bool(configDict["General"].get("showAllPlots", configDict["General"].get("showPlots", False)) or configDict["General"].get("showBGRPlot", False) or configDict["General"].get("showLABPlot", False) or configDict["General"].get("showEdgeDetectionPlot", False)),
         )
+        saveMeasurementOutputsFromConfig(measurement, configDict)
     except Exception as e:
         LOGGER.error(f"CRT calculation failed on {crtVideoPath}:\n{e}")
         return False
@@ -1508,6 +1789,7 @@ def multiVideoPipeline(
                 configDict,
                 savePlot=showPlots,
             )
+            saveMeasurementOutputsFromConfig(measurement, configDict)
             processedPaths.append(actualPath)
         except Exception as e:
             LOGGER.error(f"CRT calculation failed on {actualPath}:\n{e}")

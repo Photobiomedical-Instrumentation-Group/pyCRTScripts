@@ -19,7 +19,7 @@ fromTime = 0
 toTime = inf
 sliceMethod = "from local max"
 exclusionMethod = "first positive peak"
-exclusionCriteria = inf
+maxUncertaintyRatio = 0.1
 initialGuesses = [1.0, -0.5, 0.0]
 
 [ReleaseFrameDetection]
