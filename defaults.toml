@@ -15,8 +15,8 @@ playbackSpeed = "fast"
 [Measurement]
 roi = -1
 channel = "g"
-fromTime = 0
-toTime = inf
+fromTime = -1
+toTime = -1
 sliceMethod = "from local max"
 exclusionMethod = "first positive peak"
 exclusionCriteria = inf

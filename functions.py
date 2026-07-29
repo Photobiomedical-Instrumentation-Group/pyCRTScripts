@@ -286,7 +286,7 @@ def createCrtMeasurementPlot(
     labAIntensArr: np.ndarray,
     bgrGIntensArr: np.ndarray,
     timeArr: np.ndarray,
-    releaseIndex: int,
+    releaseIndex: int | None,
     crtIntervalStartIndex: int,
     startIndex: int,
     crtIntervalEndIndex: int,
@@ -340,7 +340,13 @@ def createCrtMeasurementPlot(
             color="tab:gray",
             alpha=0.12,
         )
-        fullAx.axvline(timeArr[releaseIndex], color="black", ls="--", label="release")
+        if releaseIndex is not None:
+            fullAx.axvline(
+                timeArr[int(releaseIndex)],
+                color="black",
+                ls="--",
+                label="release",
+            )
         fullAx.axvline(
             timeArr[crtIntervalStartIndex],
             color="black",
@@ -463,12 +469,13 @@ def createCrtMeasurementPlot(
                 lw=1,
                 label=metricLabel,
             )
-            metricAx.axvline(
-                timeArr[releaseIndex],
-                color="black",
-                ls="--",
-                label=f"release={releaseIndex}",
-            )
+            if releaseIndex is not None:
+                metricAx.axvline(
+                    timeArr[int(releaseIndex)],
+                    color="black",
+                    ls="--",
+                    label=f"release={int(releaseIndex)}",
+                )
             metricAx.legend(loc="lower left", fontsize="small")
         metricAx.set_title("Release detection metric")
         metricAx.grid(True)
@@ -620,8 +627,21 @@ def measureCRTVideoFromConfig(
     if showAllPlots or generalConfig.get("showEdgeDetectionPlot", False):
         plotSections.add("edge")
     showPlots = bool(plotSections)
+    measurementConfig = configDict["Measurement"]
+    fromTime = float(measurementConfig.get("fromTime", -1))
+    toTime = float(measurementConfig.get("toTime", -1))
+    hasFromTime = fromTime >= 0
+    hasToTime = toTime >= 0
+    manualTimeWindow = hasFromTime and hasToTime
+    if hasFromTime != hasToTime:
+        raise ValueError(
+            "Measurement.fromTime and Measurement.toTime must either both be "
+            "non-negative or both be negative."
+        )
+    if manualTimeWindow and toTime <= fromTime:
+        raise ValueError("Measurement.toTime must be greater than Measurement.fromTime.")
 
-    roi = configDict["Measurement"]["roi"]
+    roi = measurementConfig["roi"]
     if roi == -1:
         pass
     elif not isValidRoi(roi):
@@ -662,22 +682,40 @@ def measureCRTVideoFromConfig(
         videoPath,
         roi,
         releaseParams,
-        showEdgeDetection=videoConfig.get("showEdgeDetection", False),
+        showEdgeDetection=videoConfig.get("showEdgeDetection", False)
+        and not manualTimeWindow,
         showVideoFrames=videoConfig.get("showVideoFrames", False),
         playbackSpeed=videoConfig.get("playbackSpeed", "fast"),
+        skipReleaseDetection=manualTimeWindow,
         returnReleaseMetric=True,
     )
     crtIntervalStartIndex = None
     startIndex = None
     crtIntervalEndIndex = None
     try:
-        crtIndices = findCrtIntervalIndices(
-            labAIntensArr,
-            timeArr,
-            releaseIndex,
-            slicingParams,
-        )
-        crtIntervalStartIndex, startIndex, crtIntervalEndIndex = crtIndices
+        if manualTimeWindow:
+            crtIntervalStartIndex = int(np.searchsorted(timeArr, fromTime, side="left"))
+            crtIntervalEndIndex = int(np.searchsorted(timeArr, toTime, side="right"))
+            crtIntervalEndIndex = min(crtIntervalEndIndex, len(timeArr))
+            if crtIntervalStartIndex >= len(timeArr):
+                raise ValueError(
+                    "Measurement.fromTime is after the last video timestamp: "
+                    f"{fromTime}."
+                )
+            if crtIntervalEndIndex <= crtIntervalStartIndex:
+                raise ValueError(
+                    "No video samples were found in the manual Measurement.fromTime "
+                    f"to Measurement.toTime interval: {fromTime} to {toTime}."
+                )
+            startIndex = crtIntervalStartIndex
+        else:
+            crtIndices = findCrtIntervalIndices(
+                labAIntensArr,
+                timeArr,
+                releaseIndex,
+                slicingParams,
+            )
+            crtIntervalStartIndex, startIndex, crtIntervalEndIndex = crtIndices
         metrics, metricDetails, metricErrors = calculateCrtMetrics(
             labAIntensArr,
             bgrGIntensArr,
@@ -685,7 +723,7 @@ def measureCRTVideoFromConfig(
             crtIntervalStartIndex,
             startIndex,
             crtIntervalEndIndex,
-            maxUncertaintyRatio=configDict["Measurement"].get(
+            maxUncertaintyRatio=measurementConfig.get(
                 "maxUncertaintyRatio",
                 np.inf,
             ),
@@ -712,8 +750,13 @@ def measureCRTVideoFromConfig(
     result = {
         "videoPath": str(videoPath),
         "roi": roi,
-        "releaseIndex": int(releaseIndex),
-        "releaseTime": float(timeArr[releaseIndex]),
+        "manualTimeWindow": manualTimeWindow,
+        "fromTime": fromTime if manualTimeWindow else np.nan,
+        "toTime": toTime if manualTimeWindow else np.nan,
+        "releaseIndex": int(releaseIndex) if releaseIndex is not None else -1,
+        "releaseTime": float(timeArr[int(releaseIndex)])
+        if releaseIndex is not None
+        else np.nan,
         "crtIntervalStartIndex": int(crtIntervalStartIndex),
         "startIndex": int(startIndex),
         "crtIntervalEndIndex": int(crtIntervalEndIndex),
@@ -771,6 +814,7 @@ def detectReleaseFrameFromVideo(
     showEdgeDetection: bool = False,
     showVideoFrames: bool = False,
     playbackSpeed: str = "fast",
+    skipReleaseDetection: bool = False,
     returnReleaseMetric: bool = False,
 ):
     # {{{
@@ -888,7 +932,9 @@ def detectReleaseFrameFromVideo(
             labAIntensities.append(float(np.mean(croppedLabFrame[..., 1])))
             bgrGIntensities.append(float(np.mean(croppedBgrFrame[..., 1])))
 
-            if algorithm == "canny":
+            if skipReleaseDetection:
+                pass
+            elif algorithm == "canny":
                 edgeFrame = lFrame
                 blurKernel = int(params.get("blurKernel", 0))
                 if blurKernel > 0:
@@ -926,7 +972,7 @@ def detectReleaseFrameFromVideo(
                         cv.hconcat([normalizedLaplacianFrame, lFrame]),
                     )
 
-            if showEdgeDetection or showVideoFrames:
+            if (showEdgeDetection and not skipReleaseDetection) or showVideoFrames:
                 key = cv.waitKey(playbackWaitMsBySpeed[playbackSpeed]) & 0xFF
                 if key == ord(" ") and showVideoFrames and not requireRoiSelection:
                     selectedRoi = cv.selectROI(bgrWindowName, rescaledBgrFrame)
@@ -942,7 +988,7 @@ def detectReleaseFrameFromVideo(
                 elif key == ord("q"):
                     break
 
-    if showEdgeDetection or showVideoFrames:
+    if (showEdgeDetection and not skipReleaseDetection) or showVideoFrames:
         for windowName in (
             bgrWindowName,
             "Canny release frame",
@@ -959,6 +1005,11 @@ def detectReleaseFrameFromVideo(
     releaseMetricArr = np.asarray(releaseMetrics, dtype=float)
     if len(timeArr) == 0:
         raise RuntimeError(f"No frames were read from {videoPath}.")
+
+    if skipReleaseDetection:
+        if returnReleaseMetric:
+            return labAIntensArr, bgrGIntensArr, timeArr, None, None
+        return labAIntensArr, bgrGIntensArr, timeArr, None
 
     if releaseMetricArr.max() == releaseMetricArr.min():
         releaseMetricArr = np.zeros_like(releaseMetricArr)

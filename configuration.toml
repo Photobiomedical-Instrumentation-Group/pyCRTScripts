@@ -15,8 +15,8 @@ playbackSpeed = "fast"
 [Measurement]
 roi = -1
 channel = "g"
-fromTime = 0
-toTime = inf
+fromTime = -1
+toTime = -1
 sliceMethod = "from local max"
 exclusionMethod = "first positive peak"
 maxUncertaintyRatio = 0.1
@@ -56,9 +56,9 @@ offsetTime = 0.10563336383996912
 
 [General]
 askConfirmation = true
-showAllPlots = true
+showAllPlots = false
 showBGRPlot = true
-showLABPlot = true
-showEdgeDetectionPlot = true
+showLABPlot = false
+showEdgeDetectionPlot = false
 writeLogFile = true
 logLevel = "DEBUG"
