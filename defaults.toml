@@ -1,33 +1,60 @@
 [Files]
-plotPath = "Plots"
-csvPath = "results_sheet.csv"
-npzPath = "Npz"
-provideXLSX = true
-overwrite = false
+plotPath = "Plots"  # Directory where diagnostic plots are saved.
+csvPath = "results_sheet.csv"  # CSV file where measurement summaries are saved; empty disables CSV output.
+npzPath = "Npz"  # Directory where full measurement NPZ files are saved; empty disables NPZ output.
+provideXLSX = true  # Also save an XLSX copy next to the CSV file.
+overwrite = false  # Replace existing output rows/files instead of creating unique names.
 
 [Video]
-rescaleFactor = 0.5
-livePlot = false  # Leave as false if using Windows
-showEdgeDetection = false
-showVideoFrames = false
-playbackSpeed = "fast"
+showEdgeDetection = false  # Show the live release-detection frame while processing.
+showVideoFrames = false  # Show the live BGR frame with the measurement ROI while processing.
+playbackSpeed = "fast"  # OpenCV display delay for live windows: fast, medium, or slow.
 
 [Measurement]
-roi = -1
-channel = "g"
-fromTime = -1
-toTime = -1
-sliceMethod = "from local max"
-exclusionMethod = "first positive peak"
-exclusionCriteria = inf
-initialGuesses = [1.0, -0.5, 0.0]
-maxUncertaintyRatio = inf
+roi = -1  # Measurement ROI at Measurement.rescaleFactor; -1 prompts ROI selection, "all" uses the full frame.
+rescaleFactor = 0.5  # Scale used for average-intensity calculation and displayed BGR frames.
+fromTime = -1  # Manual CRT interval start time in seconds; use -1 for automatic interval detection.
+toTime = -1  # Manual CRT interval end time in seconds; use -1 for automatic interval detection.
+pCRTAlgorithm = "first positive peak"  # Exclusion method passed to pyCRT.curveFitting.calcPCRT.
+maxUncertaintyRatio = inf  # Measurements fail when uncertainty / value is above this value.
+initialGuesses = [1.0, -0.5, 0.0]  # Initial exponential-fit guesses passed to calcPCRT.
+
+[ReleaseFrameDetection]
+algorithm = "canny"  # Release detector to use: canny or laplacian.
+medianKernelRadius = 1  # Median blur radius applied to raw BGR frames before processing.
+
+[ReleaseFrameDetection.canny]
+thresh1 = 47  # Lower Canny threshold.
+thresh2 = 64  # Upper Canny threshold.
+blurKernel = 0  # Gaussian blur radius before Canny; 0 disables the blur.
+l2grad = false  # Use the more exact L2 gradient magnitude in Canny.
+cannyPlateau = 8.261879165862927  # Plateau threshold used when selecting the release index.
+cannySmoothingKernel = 1  # Median-filter kernel for the normalized Canny intensity array.
+cannyGradientSmoothingKernel = 1  # Median-filter kernel for the Canny gradient array.
+indexOffset = 0  # Integer frame offset added to the detected release index.
+
+[ReleaseFrameDetection.laplacian]
+scale = 1  # Multiplicative scale applied by cv.Laplacian.
+delta = 0  # Additive offset applied by cv.Laplacian.
+ksize = 3  # Laplacian kernel radius; OpenCV kernel size is 2 * ksize + 1.
+blurKernel = 0  # Gaussian blur radius before Laplacian; 0 disables the blur.
+laplacianPlateau = 1.7953339084618558  # Plateau threshold used when selecting the release index.
+laplacianSmoothingKernel = 1  # Median-filter kernel for the normalized Laplacian intensity array.
+laplacianGradientSmoothingKernel = 1  # Median-filter kernel for the Laplacian gradient array.
+indexOffset = 0  # Integer frame offset added to the detected release index.
+
+[AverageIntensitySlicing]
+strictMinGrad = -1.0  # Lower strict gradient bound for selecting the CRT interval start.
+strictMaxGrad = 1.0  # Upper strict gradient bound for selecting the CRT interval start.
+relaxMinGrad = -3.0  # Lower relaxed gradient bound for extending the CRT interval.
+relaxMaxGrad = 3.0  # Upper relaxed gradient bound for extending the CRT interval.
+offsetTime = 0.0  # Seconds added to the detected CRT interval start.
 
 [General]
-logLevel = "DEBUG"
-showAllPlots = true
-showBGRPlot = true
-showLABPlot = true
-showEdgeDetectionPlot = true
-askConfirmation = true
-writeLogFile = true
+askConfirmation = true  # Ask before processing each video in multi-video mode.
+showAllPlots = false  # Show/save all diagnostic plot sections.
+showBGRPlot = false  # Include the BGR G diagnostic plot section.
+showLABPlot = false  # Include the LAB A diagnostic plot section.
+showEdgeDetectionPlot = false  # Include the release-detection diagnostic plot section.
+writeLogFile = false  # Also write logs to log.txt.
+logLevel = "INFO"  # Logger level, for example DEBUG, INFO, WARNING, or ERROR.

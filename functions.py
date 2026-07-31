@@ -12,7 +12,7 @@ import numpy as np
 import pandas as pd
 from matplotlib import pyplot as plt
 from pyCRT.curveFitting import (
-    calcPCRTFirstPositivePeak,
+    calcPCRT,
     exponential,
     pCRTFromParameters,
 )
@@ -41,6 +41,13 @@ PLAYBACK_FPS_SPEED = {
 NORM_LEVEL = 25
 logging.addLevelName(NORM_LEVEL, "NORM")
 VIDEO_FORMATS = (".mp4", ".wmv", ".avi", ".mov", ".mkv")
+RELEASE_FRAME_RESCALE_FACTOR = 0.5
+CRT_LOG_LABELS = {
+    "bgr_g": "BGR G",
+    "lab_a": "-LAB A",
+    "crt90_10": "CRT90_10",
+    "pcrt": "pCRT",
+}
 
 
 def getLogger(name: str) -> logging.Logger:
@@ -58,6 +65,32 @@ def getLogger(name: str) -> logging.Logger:
 
 
 LOGGER = getLogger("mauricio")
+
+
+def logMeasurementMetrics(measurement: dict[str, Any]) -> None:
+    # {{{
+    videoName = Path(measurement.get("videoPath", "")).name
+    metrics = measurement.get("metrics", {})
+    metricErrors = measurement.get("metricErrors", {})
+    for channelKey in ("bgr_g", "lab_a"):
+        channelLabel = CRT_LOG_LABELS[channelKey]
+        for metricKey in ("crt90_10", "pcrt"):
+            fullMetricKey = f"{channelKey}_{metricKey}"
+            metricLabel = CRT_LOG_LABELS[metricKey]
+            if fullMetricKey in metrics:
+                value, uncertainty = metrics[fullMetricKey]
+                LOGGER.info(
+                    f"{videoName}: {channelLabel} {metricLabel} = "
+                    f"{value:.6g} +/- {uncertainty:.6g} s"
+                )
+            if fullMetricKey in metricErrors:
+                LOGGER.debug(
+                    f"{videoName}: {channelLabel} {metricLabel} failed: "
+                    f"{metricErrors[fullMetricKey]}"
+                )
+
+
+# }}}
 
 
 def enableFileLogging(
@@ -144,6 +177,33 @@ def normalizeIntensities(array: np.ndarray) -> np.ndarray:
 # }}}
 
 
+def roiForReleaseScale(
+    roi: RoiTuple | str,
+    measurementRescaleFactor: float,
+) -> RoiTuple | str:
+    # {{{
+    if roi == "all":
+        return roi
+    if not isValidRoi(roi):
+        raise ValueError(f"{roi} is not a valid ROI.")
+    if measurementRescaleFactor <= 0:
+        raise ValueError(
+            f"Measurement.rescaleFactor must be positive: {measurementRescaleFactor}."
+        )
+
+    scaleFactor = RELEASE_FRAME_RESCALE_FACTOR / measurementRescaleFactor
+    x, y, width, height = roi
+    return (
+        int(round(x * scaleFactor)),
+        int(round(y * scaleFactor)),
+        max(1, int(round(width * scaleFactor))),
+        max(1, int(round(height * scaleFactor))),
+    )
+
+
+# }}}
+
+
 def calculateCrt90_10Details(
     signalArr: np.ndarray,
     timeArr: np.ndarray,
@@ -217,8 +277,7 @@ def validateUncertaintyRatio(
         raise ValueError(f"{metricName} uncertainty is NaN.")
     if not np.isfinite(uncertainty) or uncertainty < 0:
         raise ValueError(
-            f"{metricName} uncertainty must be finite and non-negative: "
-            f"{uncertainty}."
+            f"{metricName} uncertainty must be finite and non-negative: {uncertainty}."
         )
     if not np.isfinite(metricValue) or metricValue == 0:
         raise ValueError(
@@ -246,6 +305,8 @@ def calculatePcrtDetails(
     startIndex: int,
     crtIntervalEndIndex: int,
     maxUncertaintyRatio: float = np.inf,
+    pCRTInitialGuesses: list[float] | tuple[float, ...] | np.ndarray | None = None,
+    pCRTAlgorithm: str = "first positive peak",
 ) -> dict[str, Any]:
     # {{{
     intervalValues = signalArr[crtIntervalStartIndex:crtIntervalEndIndex]
@@ -257,7 +318,13 @@ def calculatePcrtDetails(
     referenceMin = intervalValues.min()
     referenceRange = intervalValues.max() - referenceMin
     fitValues = (fitValues - referenceMin) / referenceRange
-    pcrtTuple, criticalTime = calcPCRTFirstPositivePeak(fitTimes, fitValues)
+    pcrtTuple, criticalTime = calcPCRT(
+        fitTimes,
+        fitValues,
+        pCRTInitialGuesses=pCRTInitialGuesses,
+        exclusionMethod=pCRTAlgorithm,
+        exclusionCriteria=maxUncertaintyRatio,
+    )
     pcrtValue, pcrtUncertainty = pCRTFromParameters(pcrtTuple)
     uncertaintyRatio = validateUncertaintyRatio(
         "pCRT",
@@ -305,7 +372,9 @@ def createCrtMeasurementPlot(
     if "bgr" in plotSections:
         selectedChannels.append(("BGR G", bgrGIntensArr, "tab:green", "bgr_g", "bgr"))
     if "lab" in plotSections:
-        selectedChannels.append(("-LAB A", -1 * labAIntensArr, "tab:blue", "lab_a", "lab"))
+        selectedChannels.append(
+            ("-LAB A", -1 * labAIntensArr, "tab:blue", "lab_a", "lab")
+        )
     if not selectedChannels and "edge" not in plotSections:
         selectedChannels.append(("BGR G", bgrGIntensArr, "tab:green", "bgr_g", "bgr"))
 
@@ -412,7 +481,9 @@ def createCrtMeasurementPlot(
             referenceMin = referenceValues.min()
             referenceRange = referenceValues.max() - referenceMin
             if referenceRange != 0:
-                normalizedFitValues = (pcrt["fitValues"] - referenceMin) / referenceRange
+                normalizedFitValues = (
+                    pcrt["fitValues"] - referenceMin
+                ) / referenceRange
                 detailAx.plot(
                     pcrt["fitTimes"],
                     normalizedFitValues,
@@ -486,6 +557,7 @@ def createCrtMeasurementPlot(
     fig.tight_layout(rect=(0.025, 0.035, 0.985, 0.955))
     return fig
 
+
 # }}}
 
 
@@ -509,7 +581,7 @@ def createAverageIntensityFailurePlot(
     if "bgr" in plotSections:
         selectedChannels.append(("BGR G", bgrGIntensArr, "tab:green", "bgr"))
     if "lab" in plotSections:
-        selectedChannels.append(("LAB A", labAIntensArr, "tab:blue", "lab"))
+        selectedChannels.append(("-LAB A", -1 * labAIntensArr, "tab:blue", "lab"))
     if not selectedChannels and "edge" not in plotSections:
         selectedChannels.append(("BGR G", bgrGIntensArr, "tab:green", "bgr"))
 
@@ -605,6 +677,7 @@ def createAverageIntensityFailurePlot(
     fig.tight_layout(rect=(0.025, 0.08, 0.985, 0.88))
     return fig
 
+
 # }}}
 
 
@@ -630,6 +703,7 @@ def measureCRTVideoFromConfig(
     measurementConfig = configDict["Measurement"]
     fromTime = float(measurementConfig.get("fromTime", -1))
     toTime = float(measurementConfig.get("toTime", -1))
+    measurementRescaleFactor = float(measurementConfig.get("rescaleFactor", 0.5))
     hasFromTime = fromTime >= 0
     hasToTime = toTime >= 0
     manualTimeWindow = hasFromTime and hasToTime
@@ -639,7 +713,9 @@ def measureCRTVideoFromConfig(
             "non-negative or both be negative."
         )
     if manualTimeWindow and toTime <= fromTime:
-        raise ValueError("Measurement.toTime must be greater than Measurement.fromTime.")
+        raise ValueError(
+            "Measurement.toTime must be greater than Measurement.fromTime."
+        )
 
     roi = measurementConfig["roi"]
     if roi == -1:
@@ -669,6 +745,8 @@ def measureCRTVideoFromConfig(
     }
     releaseParams.update(releaseConfig[releaseAlgorithm])
     releaseParams["algorithm"] = releaseAlgorithm
+    releaseParams.pop("rescaleFactor", None)
+    releaseParams["releaseRescaleFactor"] = RELEASE_FRAME_RESCALE_FACTOR
 
     slicingParams = dict(configDict["AverageIntensitySlicing"])
     videoConfig = configDict["Video"]
@@ -688,6 +766,7 @@ def measureCRTVideoFromConfig(
         playbackSpeed=videoConfig.get("playbackSpeed", "fast"),
         skipReleaseDetection=manualTimeWindow,
         returnReleaseMetric=True,
+        measurementRescaleFactor=measurementRescaleFactor,
     )
     crtIntervalStartIndex = None
     startIndex = None
@@ -727,8 +806,14 @@ def measureCRTVideoFromConfig(
                 "maxUncertaintyRatio",
                 np.inf,
             ),
+            pCRTInitialGuesses=measurementConfig.get("initialGuesses"),
+            pCRTAlgorithm=measurementConfig.get(
+                "pCRTAlgorithm",
+                "first positive peak",
+            ),
         )
     except Exception as err:
+        LOGGER.debug(f"{videoPath.name}: CRT calculation failed: {err}")
         if showPlots:
             failureFig = createAverageIntensityFailurePlot(
                 videoPath,
@@ -750,6 +835,7 @@ def measureCRTVideoFromConfig(
     result = {
         "videoPath": str(videoPath),
         "roi": roi,
+        "measurementRescaleFactor": measurementRescaleFactor,
         "manualTimeWindow": manualTimeWindow,
         "fromTime": fromTime if manualTimeWindow else np.nan,
         "toTime": toTime if manualTimeWindow else np.nan,
@@ -770,6 +856,7 @@ def measureCRTVideoFromConfig(
         "timeArr": timeArr,
         "releaseMetricData": releaseMetricData,
     }
+    logMeasurementMetrics(result)
 
     if savePlot or showPlots:
         fig = createCrtMeasurementPlot(
@@ -804,6 +891,7 @@ def measureCRTVideoFromConfig(
 
     return result
 
+
 # }}}
 
 
@@ -816,6 +904,7 @@ def detectReleaseFrameFromVideo(
     playbackSpeed: str = "fast",
     skipReleaseDetection: bool = False,
     returnReleaseMetric: bool = False,
+    measurementRescaleFactor: float = 0.5,
 ):
     # {{{
     videoPath = Path(videoPath)
@@ -850,7 +939,11 @@ def detectReleaseFrameFromVideo(
         )
 
     medianKernelRadius = int(params.get("medianKernelRadius", 1))
-    rescaleFactor = float(params.get("rescaleFactor", 0.5))
+    measurementRescaleFactor = float(measurementRescaleFactor)
+    if measurementRescaleFactor <= 0:
+        raise ValueError(
+            f"Measurement.rescaleFactor must be positive: {measurementRescaleFactor}."
+        )
     roiSelected = isValidRoi(roi) or roi == "all"
     requireRoiSelection = not roiSelected
     bgrWindowName = "BGR frame with ROI"
@@ -863,17 +956,20 @@ def detectReleaseFrameFromVideo(
                 else:
                     medianFrame = frame
 
-                rescaledBgrFrame = rescaleFrame(medianFrame, rescaleFactor)
+                measurementBgrFrame = rescaleFrame(
+                    medianFrame,
+                    measurementRescaleFactor,
+                )
                 cv.namedWindow(bgrWindowName, cv.WINDOW_NORMAL | cv.WINDOW_GUI_NORMAL)
                 cv.resizeWindow(
                     bgrWindowName,
-                    rescaledBgrFrame.shape[1],
-                    rescaledBgrFrame.shape[0],
+                    measurementBgrFrame.shape[1],
+                    measurementBgrFrame.shape[0],
                 )
-                cv.imshow(bgrWindowName, rescaledBgrFrame)
+                cv.imshow(bgrWindowName, measurementBgrFrame)
                 key = cv.waitKey(playbackWaitMsBySpeed[playbackSpeed]) & 0xFF
                 if key == ord(" "):
-                    selectedRoi = cv.selectROI(bgrWindowName, rescaledBgrFrame)
+                    selectedRoi = cv.selectROI(bgrWindowName, measurementBgrFrame)
                     if selectedRoi[2] > 0 and selectedRoi[3] > 0:
                         roi = tuple(int(value) for value in selectedRoi)
                         roiSelected = True
@@ -897,6 +993,9 @@ def detectReleaseFrameFromVideo(
             "CRT calculation."
         )
 
+    measurementRoi = roi
+    releaseRoi = roiForReleaseScale(measurementRoi, measurementRescaleFactor)
+
     labAIntensities = []
     bgrGIntensities = []
     releaseMetrics = []
@@ -910,10 +1009,16 @@ def detectReleaseFrameFromVideo(
             else:
                 medianFrame = frame
 
-            rescaledBgrFrame = rescaleFrame(medianFrame, rescaleFactor)
+            measurementBgrFrame = rescaleFrame(
+                medianFrame,
+                measurementRescaleFactor,
+            )
+            releaseBgrFrame = rescaleFrame(medianFrame, RELEASE_FRAME_RESCALE_FACTOR)
             if showVideoFrames:
                 cv.namedWindow(bgrWindowName, cv.WINDOW_NORMAL | cv.WINDOW_GUI_NORMAL)
-                displayFrame = drawRoi(rescaledBgrFrame.copy(), roi)
+                displayFrame = measurementBgrFrame.copy()
+                if isValidRoi(measurementRoi):
+                    displayFrame = drawRoi(displayFrame, measurementRoi)
                 cv.resizeWindow(
                     bgrWindowName,
                     displayFrame.shape[1],
@@ -921,12 +1026,16 @@ def detectReleaseFrameFromVideo(
                 )
                 cv.imshow(bgrWindowName, displayFrame)
 
-            croppedBgrFrame = cropFrame(rescaledBgrFrame, roi)
-            float32Frame = medianFrame.astype(np.float32) / 255
-            labFrame = cv.cvtColor(float32Frame, cv.COLOR_BGR2LAB)
-            rescaledLabFrame = rescaleFrame(labFrame, rescaleFactor)
-            croppedLabFrame = cropFrame(rescaledLabFrame, roi)
-            lFrame = np.uint8(np.round(croppedLabFrame[..., 0] * 255 / 100))
+            measurementFloat32Frame = measurementBgrFrame.astype(np.float32) / 255
+            releaseFloat32Frame = releaseBgrFrame.astype(np.float32) / 255
+            measurementLabFrame = cv.cvtColor(measurementFloat32Frame, cv.COLOR_BGR2LAB)
+            releaseLabFrame = cv.cvtColor(releaseFloat32Frame, cv.COLOR_BGR2LAB)
+            croppedBgrFrame = cropFrame(measurementBgrFrame, measurementRoi)
+            croppedLabFrame = cropFrame(measurementLabFrame, measurementRoi)
+            croppedReleaseLabFrame = cropFrame(releaseLabFrame, releaseRoi)
+            releaseLFrame = np.uint8(
+                np.round(croppedReleaseLabFrame[..., 0] * 255 / 100)
+            )
 
             times.append(timeScds)
             labAIntensities.append(float(np.mean(croppedLabFrame[..., 1])))
@@ -935,7 +1044,7 @@ def detectReleaseFrameFromVideo(
             if skipReleaseDetection:
                 pass
             elif algorithm == "canny":
-                edgeFrame = lFrame
+                edgeFrame = releaseLFrame
                 blurKernel = int(params.get("blurKernel", 0))
                 if blurKernel > 0:
                     kernel = (2 * blurKernel) + 1
@@ -950,7 +1059,7 @@ def detectReleaseFrameFromVideo(
                 if showEdgeDetection:
                     cv.imshow("Canny release frame", cannyFrame)
             else:
-                edgeFrame = lFrame
+                edgeFrame = releaseLFrame
                 blurKernel = int(params.get("blurKernel", 0))
                 if blurKernel > 0:
                     kernel = (2 * blurKernel) + 1
@@ -969,22 +1078,28 @@ def detectReleaseFrameFromVideo(
                     )
                     cv.imshow(
                         "Laplacian | L",
-                        cv.hconcat([normalizedLaplacianFrame, lFrame]),
+                        cv.hconcat([normalizedLaplacianFrame, releaseLFrame]),
                     )
 
             if (showEdgeDetection and not skipReleaseDetection) or showVideoFrames:
                 key = cv.waitKey(playbackWaitMsBySpeed[playbackSpeed]) & 0xFF
                 if key == ord(" ") and showVideoFrames and not requireRoiSelection:
-                    selectedRoi = cv.selectROI(bgrWindowName, rescaledBgrFrame)
+                    selectedRoi = cv.selectROI(bgrWindowName, measurementBgrFrame)
                     if selectedRoi[2] > 0 and selectedRoi[3] > 0:
-                        roi = tuple(int(value) for value in selectedRoi)
+                        measurementRoi = tuple(int(value) for value in selectedRoi)
+                        releaseRoi = roiForReleaseScale(
+                            measurementRoi,
+                            measurementRescaleFactor,
+                        )
                         labAIntensities = []
                         bgrGIntensities = []
                         releaseMetrics = []
                         times = []
-                        print(f"Selected ROI: {list(roi)}")
+                        print(f"Selected ROI: {list(measurementRoi)}")
                     else:
-                        print("No ROI selected. Press spacebar and drag a non-empty ROI.")
+                        print(
+                            "No ROI selected. Press spacebar and drag a non-empty ROI."
+                        )
                 elif key == ord("q"):
                     break
 
@@ -1233,6 +1348,8 @@ def calculateCrtMetrics(
     startIndex: int,
     crtIntervalEndIndex: int,
     maxUncertaintyRatio: float = np.inf,
+    pCRTInitialGuesses: list[float] | tuple[float, ...] | np.ndarray | None = None,
+    pCRTAlgorithm: str = "first positive peak",
 ) -> tuple[
     dict[str, tuple[float, float]],
     dict[str, dict[str, Any]],
@@ -1271,6 +1388,8 @@ def calculateCrtMetrics(
                 startIndex,
                 crtIntervalEndIndex,
                 maxUncertaintyRatio=maxUncertaintyRatio,
+                pCRTInitialGuesses=pCRTInitialGuesses,
+                pCRTAlgorithm=pCRTAlgorithm,
             )
         except Exception as err:
             errors[pcrtKey] = str(err)
@@ -1364,6 +1483,7 @@ def calculateCrtMetrics(
         raise ValueError(f"All CRT measurements failed. {errorSummary}")
 
     return result, details, errors
+
 
 # }}}
 
@@ -1554,10 +1674,14 @@ def saveCSV(
             if column not in csvSheet.columns:
                 csvSheet[column] = np.nan
 
-        extraColumns = [column for column in csvSheet.columns if column not in colLabels]
+        extraColumns = [
+            column for column in csvSheet.columns if column not in colLabels
+        ]
         csvSheet = csvSheet[colLabels + extraColumns]
         if "Video" not in csvSheet:
-            raise RuntimeError(f"Could not load {csvPath}. CSV is missing Video column.")
+            raise RuntimeError(
+                f"Could not load {csvPath}. CSV is missing Video column."
+            )
 
         videoNameToSave = row["Video"]
         matchingRows = csvSheet.index[csvSheet["Video"] == videoNameToSave].tolist()
@@ -1571,7 +1695,9 @@ def saveCSV(
                 videoNameToSave = findUniqueName(oldVideoName, list(csvSheet["Video"]))
                 row["Video"] = videoNameToSave
                 LOGGER.info(f"{oldVideoName} found in CSV, saving as {videoNameToSave}")
-            csvSheet.loc[len(csvSheet), colLabels] = [row[column] for column in colLabels]
+            csvSheet.loc[len(csvSheet), colLabels] = [
+                row[column] for column in colLabels
+            ]
     else:
         csvSheet = pd.DataFrame([row], columns=colLabels)
 
@@ -1769,14 +1895,20 @@ def singleVideoPipeline(
         measurement = measureCRTVideoFromConfig(
             crtVideoPath,
             configDict,
-            savePlot=bool(configDict["General"].get("showAllPlots", configDict["General"].get("showPlots", False)) or configDict["General"].get("showBGRPlot", False) or configDict["General"].get("showLABPlot", False) or configDict["General"].get("showEdgeDetectionPlot", False)),
+            savePlot=bool(
+                configDict["General"].get(
+                    "showAllPlots", configDict["General"].get("showPlots", False)
+                )
+                or configDict["General"].get("showBGRPlot", False)
+                or configDict["General"].get("showLABPlot", False)
+                or configDict["General"].get("showEdgeDetectionPlot", False)
+            ),
         )
         saveMeasurementOutputsFromConfig(measurement, configDict)
     except Exception as e:
         LOGGER.error(f"CRT calculation failed on {crtVideoPath}:\n{e}")
         return False
 
-    LOGGER.log(NORM_LEVEL, f"{videoName}: {measurement['metrics']}")
     return True
 
 
@@ -1798,7 +1930,14 @@ def multiVideoPipeline(
     askConfirmation = configDict["General"]["askConfirmation"]
     processedPaths = []
     failedMeasurements = 0
-    showPlots = bool(configDict["General"].get("showAllPlots", configDict["General"].get("showPlots", False)) or configDict["General"].get("showBGRPlot", False) or configDict["General"].get("showLABPlot", False) or configDict["General"].get("showEdgeDetectionPlot", False))
+    showPlots = bool(
+        configDict["General"].get(
+            "showAllPlots", configDict["General"].get("showPlots", False)
+        )
+        or configDict["General"].get("showBGRPlot", False)
+        or configDict["General"].get("showLABPlot", False)
+        or configDict["General"].get("showEdgeDetectionPlot", False)
+    )
 
     dirPath = gui.selectDirectory()
     for candidatePath in dirPath.iterdir():
@@ -1847,8 +1986,6 @@ def multiVideoPipeline(
             failedMeasurements += 1
             processedPaths.append(actualPath)
             continue
-
-        LOGGER.log(NORM_LEVEL, f"{videoName}: {measurement['metrics']}")
 
     LOGGER.info(f"Finished processing videos in {dirPath}")
 
