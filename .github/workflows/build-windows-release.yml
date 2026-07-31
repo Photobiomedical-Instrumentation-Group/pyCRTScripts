@@ -1,0 +1,89 @@
+name: Build Windows Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Release tag to create or update"
+        required: true
+        default: "manual-build"
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows-release:
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set release variables
+        shell: pwsh
+        run: |
+          if ("${{ github.event_name }}" -eq "workflow_dispatch") {
+            $releaseTag = "${{ inputs.release_tag }}"
+          } else {
+            $releaseTag = "${{ github.ref_name }}"
+          }
+
+          "RELEASE_TAG=$releaseTag" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "PACKAGE_NAME=pyCRTScripts-$releaseTag-windows" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Build standalone EXEs
+        shell: pwsh
+        run: |
+          $scripts = @(
+            "measure_crt.py",
+            "measure_crt_video.py",
+            "measure_crt_dir.py"
+          )
+
+          foreach ($script in $scripts) {
+            $name = [System.IO.Path]::GetFileNameWithoutExtension($script)
+            pyinstaller --onefile --clean --name $name $script
+          }
+
+      - name: Package release zip
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path "$env:PACKAGE_NAME" -Force
+
+          Copy-Item "dist\measure_crt.exe" "$env:PACKAGE_NAME\"
+          Copy-Item "dist\measure_crt_video.exe" "$env:PACKAGE_NAME\"
+          Copy-Item "dist\measure_crt_dir.exe" "$env:PACKAGE_NAME\"
+          Copy-Item "configuration.toml" "$env:PACKAGE_NAME\"
+          Copy-Item "defaults.toml" "$env:PACKAGE_NAME\"
+
+          Compress-Archive -Path "$env:PACKAGE_NAME\*" -DestinationPath "$env:PACKAGE_NAME.zip" -Force
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.PACKAGE_NAME }}
+          path: ${{ env.PACKAGE_NAME }}.zip
+
+      - name: Attach zip to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          target_commitish: ${{ github.sha }}
+          files: ${{ env.PACKAGE_NAME }}.zip
+          fail_on_unmatched_files: true
+          generate_release_notes: true
