@@ -44,11 +44,11 @@ laplacianGradientSmoothingKernel = 5
 indexOffset = -2
 
 [AverageIntensitySlicing]
-strictMinGrad = -1.829632093303938
-strictMaxGrad = 1.9570490981053659
-relaxMinGrad = -9.36934937254803
-relaxMaxGrad = 9.634807412781452
-offsetTime = 0.10563336383996912
+offsetTime = 0.11661660491425706
+relaxMaxGrad = 2.536292017645295
+relaxMinGrad = -8.56556328743744
+strictMaxGrad = 1.586869761784238
+strictMinGrad = -1.08886950239089
 
 [General]
 askConfirmation = true
@@ -56,5 +56,6 @@ showAllPlots = false
 showBGRPlot = true
 showLABPlot = true
 showEdgeDetectionPlot = false
+simplerPlots = true
 writeLogFile = true
 logLevel = "DEBUG"

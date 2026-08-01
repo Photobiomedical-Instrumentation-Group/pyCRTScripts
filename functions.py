@@ -362,6 +362,7 @@ def createCrtMeasurementPlot(
     metricErrors: dict[str, str] | None = None,
     releaseMetricData: dict[str, Any] | None = None,
     plotSections: set[str] | None = None,
+    simplerPlots: bool = False,
 ):
     # {{{
     videoPath = Path(videoPath)
@@ -409,7 +410,7 @@ def createCrtMeasurementPlot(
             color="tab:gray",
             alpha=0.12,
         )
-        if releaseIndex is not None:
+        if not simplerPlots and releaseIndex is not None:
             fullAx.axvline(
                 timeArr[int(releaseIndex)],
                 color="black",
@@ -422,9 +423,15 @@ def createCrtMeasurementPlot(
             ls=":",
             label="CRT start",
         )
-        fullAx.axvline(timeArr[startIndex], color="tab:green", ls="-", label="start")
+        if not simplerPlots:
+            fullAx.axvline(
+                timeArr[startIndex],
+                color="tab:green",
+                ls="-",
+                label="start",
+            )
         fullAx.axvline(intervalEndTime, color="black", ls="-.", label="CRT end")
-        if crt90 is not None:
+        if not simplerPlots and crt90 is not None:
             fullAx.axvline(
                 crt90["time90"],
                 color="tab:green",
@@ -437,7 +444,7 @@ def createCrtMeasurementPlot(
                 ls="--",
                 label=f"10%={crt90['time10']:.3f}s",
             )
-        if pcrt is not None:
+        if not simplerPlots and pcrt is not None:
             fullAx.axvline(
                 pcrt["criticalTime"],
                 color="tab:purple",
@@ -462,7 +469,8 @@ def createCrtMeasurementPlot(
                 lw=1.4,
                 label=f"CRT90_10={crt90Value:.3f} +/- {crt90Uncertainty:.3f}s",
             )
-            detailAx.axvline(crt90["startTime"], color="tab:green", ls=":")
+            if not simplerPlots:
+                detailAx.axvline(crt90["startTime"], color="tab:green", ls=":")
             detailAx.axvline(
                 crt90["time90"],
                 color="tab:green",
@@ -573,6 +581,7 @@ def createAverageIntensityFailurePlot(
     error: Exception | None = None,
     releaseMetricData: dict[str, Any] | None = None,
     plotSections: set[str] | None = None,
+    simplerPlots: bool = False,
 ):
     # {{{
     videoPath = Path(videoPath)
@@ -597,12 +606,18 @@ def createAverageIntensityFailurePlot(
         figsize=(6 * max(len(selectedChannels), 1), 3 * len(mosaic)),
         num=f"CRT calculation failed - {videoPath.name}",
     )
-    markerSpecs = (
-        (releaseIndex, "release", "black", "--"),
-        (crtIntervalStartIndex, "CRT start", "black", ":"),
-        (startIndex, "start", "tab:green", "-"),
-        (crtIntervalEndIndex, "CRT end", "black", "-."),
-    )
+    if simplerPlots:
+        markerSpecs = (
+            (crtIntervalStartIndex, "CRT start", "black", ":"),
+            (crtIntervalEndIndex, "CRT end", "black", "-."),
+        )
+    else:
+        markerSpecs = (
+            (releaseIndex, "release", "black", "--"),
+            (crtIntervalStartIndex, "CRT start", "black", ":"),
+            (startIndex, "start", "tab:green", "-"),
+            (crtIntervalEndIndex, "CRT end", "black", "-."),
+        )
     for channelLabel, signalArr, color, channelKey in selectedChannels:
         ax = axes[f"{channelKey}_full"]
         if len(timeArr) == 0 or len(signalArr) == 0:
@@ -700,6 +715,7 @@ def measureCRTVideoFromConfig(
     if showAllPlots or generalConfig.get("showEdgeDetectionPlot", False):
         plotSections.add("edge")
     showPlots = bool(plotSections)
+    simplerPlots = bool(generalConfig.get("simplerPlots", False))
     measurementConfig = configDict["Measurement"]
     fromTime = float(measurementConfig.get("fromTime", -1))
     toTime = float(measurementConfig.get("toTime", -1))
@@ -827,6 +843,7 @@ def measureCRTVideoFromConfig(
                 error=err,
                 releaseMetricData=releaseMetricData,
                 plotSections=plotSections,
+                simplerPlots=simplerPlots,
             )
             failureFig.show()
             plt.show()
@@ -873,6 +890,7 @@ def measureCRTVideoFromConfig(
             metricErrors=metricErrors,
             releaseMetricData=releaseMetricData,
             plotSections=plotSections or {"bgr", "lab", "edge"},
+            simplerPlots=simplerPlots,
         )
         if savePlot:
             plotPath = Path(configDict["Files"]["plotPath"])

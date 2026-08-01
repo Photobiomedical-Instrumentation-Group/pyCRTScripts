@@ -56,5 +56,6 @@ showAllPlots = false  # Show/save all diagnostic plot sections.
 showBGRPlot = false  # Include the BGR G diagnostic plot section.
 showLABPlot = false  # Include the LAB A diagnostic plot section.
 showEdgeDetectionPlot = false  # Include the release-detection diagnostic plot section.
+simplerPlots = false  # Hide secondary vertical markers in diagnostic plots.
 writeLogFile = false  # Also write logs to log.txt.
 logLevel = "INFO"  # Logger level, for example DEBUG, INFO, WARNING, or ERROR.
