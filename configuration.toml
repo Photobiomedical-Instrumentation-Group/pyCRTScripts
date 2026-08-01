@@ -16,7 +16,7 @@ rescaleFactor = 0.5
 fromTime = -1
 toTime = -1
 pCRTAlgorithm = "best fit"
-maxUncertaintyRatio = inf
+maxUncertaintyRatio = 1.0
 initialGuesses = [1.0, -0.5, 0.0]
 
 [ReleaseFrameDetection]

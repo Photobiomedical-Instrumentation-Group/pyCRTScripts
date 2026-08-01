@@ -14,6 +14,7 @@ VIDEOS_DIR_LIST = [
     Path("/home/eduardo/Data/raquelMasters"),
     Path("/home/eduardo/Data/yutaoNewEquipment"),
     Path("/home/eduardo/Data/yutaoPostNew"),
+    Path("/home/eduardo/Data/WorstVideos"),
     # Path("TrainingVideos"),
 ]
 
@@ -21,7 +22,7 @@ VIDEO_EXTENSIONS = [".MOV", ".wmv", ".mp4"]
 
 ROIS_PATH = Path("rois_full.toml")
 CACHE_DIR = Path("Npz/Cache")
-SKIP_EXISTING = False
+SKIP_EXISTING = True
 RESCALE_FACTOR = 0.5
 MEDIAN_KERNEL_RADIUS = 1
 

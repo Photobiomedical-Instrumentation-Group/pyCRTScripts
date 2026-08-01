@@ -19,7 +19,7 @@ from release_frame_processing import (
 CACHE_DIR = Path("Npz/Cache")
 
 # Set to "canny" or "laplacian".
-FILTER_TYPE = "canny"
+FILTER_TYPE = "laplacian"
 
 # Accepts a cache file, a directory of cache files, or a nested list of either.
 RUN_ON = CACHE_DIR
@@ -28,47 +28,14 @@ OPTIMIZED_PARAMS_PATHS = {
     "canny": Path("optimized_params_canny.toml"),
     "laplacian": Path("optimized_params_laplacian.toml"),
 }
+OPTIMIZED_CRT_INTERVAL_PARAMS_PATH = Path("optimized_params_crt_interval.toml")
 OPTIMIZED_PARAMS_CACHE = {}
+OPTIMIZED_CRT_INTERVAL_PARAMS_CACHE = None
 
 SHOW_LIVE_WINDOW = False
 WAIT_KEY_MS = 1
 OVERWRITE_EXISTING = False
 VERBOSE = True
-
-STRICT_MAX_GRAD = 1
-STRICT_MIN_GRAD = -0.5
-RELAX_MAX_GRAD = 1.0
-RELAX_MIN_GRAD = -3.0
-
-CANNY_PARAMS = {
-    "thresh1": 56,
-    "thresh2": 85,
-    "blurKernel": 6,
-    "l2grad": False,
-    "cannyPlateau": 0.1,
-    "cannySmoothingKernel": 9,
-    "cannyGradientSmoothingKernel": 1,
-    "strictMinGrad": STRICT_MIN_GRAD,
-    "strictMaxGrad": STRICT_MAX_GRAD,
-    "relaxMinGrad": RELAX_MIN_GRAD,
-    "relaxMaxGrad": RELAX_MAX_GRAD,
-    "indexOffset": 0,
-}
-
-LAPLACIAN_PARAMS = {
-    "ksize": 3,
-    "blurKernel": 7,
-    "scale": 1,
-    "delta": 0,
-    "laplacianPlateau": 2.0,
-    "laplacianSmoothingKernel": 19,
-    "laplacianGradientSmoothingKernel": 3,
-    "strictMinGrad": STRICT_MIN_GRAD,
-    "strictMaxGrad": STRICT_MAX_GRAD,
-    "relaxMinGrad": RELAX_MIN_GRAD,
-    "relaxMaxGrad": RELAX_MAX_GRAD,
-    "indexOffset": 0,
-}
 
 
 def loadOptimizedParamsFile(path):
@@ -100,6 +67,26 @@ def loadOptimizedParams(filterType):
     return dict(params)
 
 
+def loadOptimizedCrtIntervalParams():
+    global OPTIMIZED_CRT_INTERVAL_PARAMS_CACHE
+    if OPTIMIZED_CRT_INTERVAL_PARAMS_CACHE is not None:
+        return dict(OPTIMIZED_CRT_INTERVAL_PARAMS_CACHE)
+
+    if not OPTIMIZED_CRT_INTERVAL_PARAMS_PATH.exists():
+        raise FileNotFoundError(
+            "Optimized CRT interval params TOML not found: "
+            f"{OPTIMIZED_CRT_INTERVAL_PARAMS_PATH}"
+        )
+    params = loadOptimizedParamsFile(OPTIMIZED_CRT_INTERVAL_PARAMS_PATH)
+    OPTIMIZED_CRT_INTERVAL_PARAMS_CACHE = params
+    if VERBOSE:
+        print(
+            f"loaded CRT interval params from {OPTIMIZED_CRT_INTERVAL_PARAMS_PATH}",
+            flush=True,
+        )
+    return dict(params)
+
+
 def iterCachePaths(runOn):
     if isinstance(runOn, (list, tuple, set)):
         for item in runOn:
@@ -119,10 +106,10 @@ def iterCachePaths(runOn):
 
 def paramsForFilter(filterType):
     if filterType == "canny":
-        filterParams = {**CANNY_PARAMS, **loadOptimizedParams(filterType)}
+        filterParams = loadOptimizedParams(filterType)
         return filterParams, filterParams
     if filterType == "laplacian":
-        filterParams = {**LAPLACIAN_PARAMS, **loadOptimizedParams(filterType)}
+        filterParams = loadOptimizedParams(filterType)
         return filterParams, releaseParamsFromLaplacianParams(filterParams)
     raise ValueError(f"Unsupported FILTER_TYPE: {filterType}")
 
@@ -212,6 +199,7 @@ def saveCacheData(cachePath, cacheData):
 
 def updateCacheReleaseDetection(cachePath, filterType=FILTER_TYPE):
     filterParams, releaseParams = paramsForFilter(filterType)
+    crtIntervalParams = loadOptimizedCrtIntervalParams()
     cacheData = loadCacheData(cachePath)
 
     if cacheHasReleaseFields(cacheData, filterType) and not OVERWRITE_EXISTING:
@@ -246,6 +234,9 @@ def updateCacheReleaseDetection(cachePath, filterType=FILTER_TYPE):
     cacheData[fieldNames["time"]] = np.array(releaseTimeScds, dtype=np.float64)
     cacheData[fieldNames["filter"]] = np.array(filterType)
     cacheData[fieldNames["params"]] = np.array(json.dumps(filterParams, sort_keys=True))
+    cacheData["crtIntervalParamsJson"] = np.array(
+        json.dumps(crtIntervalParams, sort_keys=True)
+    )
 
     saveCacheData(cachePath, cacheData)
     print(

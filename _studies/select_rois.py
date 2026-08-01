@@ -15,9 +15,11 @@ videosDirList = [
     Path("/home/eduardo/Data/raquelMasters"),
     Path("/home/eduardo/Data/yutaoNewEquipment"),
     Path("/home/eduardo/Data/yutaoPostNew"),
+    Path("/home/eduardo/Data/WorstVideos"),
     # Path("TrainingVideos"),
 ]
-RUN_ON = Path("/home/eduardo/Data/raquelMasters") / "P06CR2.wmv"
+# RUN_ON = Path("/home/eduardo/Data/raquelMasters") / "P06CR2.wmv"
+RUN_ON = Path("/home/eduardo/Data/WorstVideos") / "2.mp4"
 if tomlPath.exists():
     with tomlPath.open("rb") as file:
         tomlDict = load(file)
