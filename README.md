@@ -2,6 +2,9 @@
 
 User-friendly scripts designed to make pyCRT accessible to non-programmers.
 
+Calculates pCRT and CRT 90-10% on the BGR G and LAB A channels of videos
+supplied by the user.
+
 # Table of contents
 
 - [Usage](#usage)
@@ -14,46 +17,50 @@ User-friendly scripts designed to make pyCRT accessible to non-programmers.
   - [General](#general)
 - [To-do](#to-do)
 
+# Installation
+
+[Download the latest version](https://github.com/Photobiomedical-Instrumentation-Group/pyCRTScripts/releases/latest) and extract the zip file into a new directory.
+
 # Usage
 
 ## Through the EXE file (Windows only)
 
 Assuming the settings in the configuration file haven't been altered, the
-following steps describe the entire usage of the program:
+following steps describe the usage of the program:
 
-1. Navigate to the directory `dist/measure_crt/`
-2. Execute the file `measure_crt.exe`
+1. Run `measure_crt.exe`.
 
 Windows may block the execution of the program due to "unknown source". This
 is expected. Simply click "More info" -> "Run anyway".
 
-3. Select whether you would like to measure CRT in a single video or in all
+2. Select whether you would like to measure CRT in a single video or in all
    the videos inside a directory.
-4. A window should appear showing the video you selected, or the first video
+3. A window should appear showing the video you selected, or the first video
    in the directory. *If you do not see the window, it might have appeared
    under another window, such as the terminal.*
-5. If a Region of Interest (ROI) was not specified in the configuration file
+4. If a Region of Interest (ROI) was not specified in the configuration file
    (see below), press the spacebar key when pressure is being applied, click
    and drag the mouse to draw a square around the desired ROI.
-6. Check the terminal. If a ROI was selected manually, it should appear there
-   as a tuple of 4 numbers.
-7. Wait for video playback to finish.
-8. If CRT measurement was successful, you should see plots of the average
-   intensities in each channel and the CRT fit result.
-9. The aforementioned graphs are saved in the `dists/measure_crt/Plots`
+5. Check the terminal. If a ROI was selected manually, it should appear there
+   as a list of 4 numbers.
+6. Wait for video playback to finish.
+7. If any CRT measurement were successful, you should see plots of the average
+   intensities and the CRT calculation result.
+8. The aforementioned graphs are saved in the `dists/measure_crt/Plots`
    directory.
-10. The file `results_sheet.csv` is created automatically. It contains a
+9. The file `results_sheet.csv` is created automatically. It contains a
    spreadsheet of the parameters and results of every CRT measurement
    performed using the program. The file `results_sheet.xlsx` is the same
    spreadsheet, but in a format more suitable for spreadsheet software such as
    MS Excel.
-11. A log of all the messages printed on the terminal is kept in the file
+10. A log of all the messages printed on the terminal is kept in the file
     log.txt, organized by the date and time of execution of this program.
 
 ## Through the command line
 
-The script can also be executed in your Python environment. Simply run either
-`measure_crt.py` in the command line:
+The scripts can also be executed in your Python environment. For that, you
+must download/clone the repository. Simply run either `measure_crt.py` in the
+command line:
 
 ```
 python measure_crt.py
@@ -66,16 +73,13 @@ In case you specifically want to measure CRT from a single video file or from
 an entire directory of videos, you may run the scripts `measure_crt_video.py`
 and `measure_crt_dir.py` respectively.
 
-
 # Configuration file
 
-The CRT measurement parameters, as well as the program's settings can be
-configured with the `configuration.toml`, which is read at the start of each
-execution.
+The CRT measurement parameters and the program's settings can be configured
+with the `configuration.toml`, which is read at the start of each execution.
 
 Below is an application-oriented explanation of each section of the config
-file and their parameters. More detailed explanations can be found in the
-[pyCRT documentation](https://pycrt.readthedocs.io/en/stable/).
+file and their parameters:
 
 ## Files
 
@@ -99,7 +103,7 @@ file and their parameters. More detailed explanations can be found in the
 * **provideXLSX**: boolean, default = `true`
 
     Determines whether or not the XLSX will be generated. It has the same
-    contents as the CSV file, but should be more compatible with
+    contents as the CSV file, but should have better compatibility with
     Excel/Calc/Sheets, etc.
 
 * **overwrite**: boolean, default = `false`
@@ -111,37 +115,30 @@ file and their parameters. More detailed explanations can be found in the
 
 ## Video
 
-* **rescaleFactor**: float, default = `0.5`
-
-    Factor by which the video will be rescaled during playback and CRT
-    calculation. The rescaling will preserve the original aspect ratio, and
-    should not affect the measurement results. **This parameter can be very
-    useful if the video's dimensions are too large.**
-
-* **livePlot**: boolean, default = `false`
-
-    Determines whether or not a plot of the average intensities in the region
-    of interest (ROI) will be displayed along with the video. This feature
-    will cause pyCRTScripts to crash if you are using Windows, so leave it as
-    `false`.
-
-* **displayVideo**: boolean, default = `true`
+* **showVideoFrames**: boolean, default = `true`
     
     If `false`, the video will not be displayed, which speeds up processing
-    but makes it impossible to select the ROI manually. Only set it to `false`
-    if you have set a pre-defined ROI in the parameter
-        [Measurement](#measurement)/roi.
+    but makes it impossible to select the ROI manually. If
+    [Measurement](#measurement)/roi is not specified (i.e. set to `-1`), the
+    video frames will be displayed until the user selects the ROI.
 
 * **playbackSpeed**: string, default = `"fast"`
 
-    How fast the video should be played. This parameter accepts 3 possible
-    values:
+    What is the maximum speed at which the video should be played. This
+    parameter accepts 3 possible values:
 
-    `"fast"`: the playback speed will be limited only by the GPU.
+    `"fast"`: the playback speed will be limited only by the frame processing
+    power of your computer.
 
-    `"normal"`: the video will be played at its original framerate.
+    `"normal"`: the video will be played at, at most, its original framerate.
 
-    `"slow"`: the video will be played under 25 FPS.
+    `"slow"`: the video will be played under 10 FPS.
+
+* **showEdgeDetection**: boolean, default = `false`
+
+    If `true`, displays the edge-detection-processed frames. Useful for
+    debugging.
+
 
 ## Measurement
 
@@ -154,44 +151,32 @@ file and their parameters. More detailed explanations can be found in the
     ROI will be set, and the user must specify one manually during video
     playback.
 
-* **channel**: string, default = `"g"`
+* **rescaleFactor**: float, default = `0.5`
 
-    Which channel should be used to perform the CRT calculation. Possible
-    values are "r", "g" and "b", for the red, green and blue RGB channels,
-    respectively.
+    Factor by which the video will be rescaled during playback and CRT
+    calculation. The rescaling will preserve the original aspect ratio, and
+    should not affect the measurement results. **This parameter can be very
+    useful if the video's dimensions are very large, which impedes display on
+    smaller screens and significantly slows down processing time.**
 
-* **fromTime**: float, default = `0.0`
+* **fromTime**: float, default = `-1`
 
     Time (in seconds) after which the Capillary Refill phenomenon starts. It
     does not represent the exact time where CR starts, but rather, a lower
-    bound for the start time. How exactly this parameter is used depends on
-    the parameter `sliceMethod`. This time is relative to *the moment the ROI
-    is selected*, and not to absolute video time. Though not strictly
-    necessary, specifying this parameter in your measurement protocol is
-    recommended.
+    bound for the start time. If set to `-1`, then automatic CRT interval
+    detection will be performed on the video. It is recommended that you fix
+    this value in your measurement protocol instead of relying on automatic
+    CRT interval detection.
 
-* **toTime**: float, default = `inf` (infinity)
+* **toTime**: float, default = `-1`
 
     Time (in seconds) before which the Capillary Refill phenomenon ends. It
     does not represent the exact time where CR ends, but rather, a higher
-    bound for the end time. How exactly this parameter is used depends on the
-    parameter `sliceMethod`. Again, this time is relative to *the moment the
-    ROI is selected*, and not to absolute video time. Though not strictly
-    necessary, specifying this parameter in your measurement protocol is
-    recommended.
+    bound for the end time. If set to `-1`, then automatic CRT interval
+    detection will be performed on the video. Again, we recommend setting this
+    parameter as constant in your measurement protocol.
 
-* **sliceMethod**: string, default = `"from local max"`
-
-    Method by which pyCRTScripts will determine when the Capillary Refill
-    starts. Possible values are:
-
-    `"from local max"`: pyCRTScripts will use local maximum of the channel's
-    intensities between `fromTime` and `toTime`.
-
-    `"by time"`: In this case, the `fromTime` parameter will be used as the
-    start time of the CR.
-
-* **exclusionMethod**: string, default = `"first positive peak"`
+* **pCRTAlgorithm**: string, default = `"first positive peak"`
 
     Determines which algorithm is used for Critical Time (CT) selection, which
     marks the end of the CR phenomenon. This determines the success rate of
@@ -213,7 +198,7 @@ file and their parameters. More detailed explanations can be found in the
     same video, so it is important to select a single method to use throughout
     your study.
 
-* **exclusionCriteria**: float, default = `inf` (infinity)
+* **maxUncertaintyRatio**: float, default = `1.0`
 
     The maximum relative uncertainty. If `(CRT / std(CRT)) >
     exclusionCriteria`, pyCRTScripts will report that the measurement has
@@ -225,16 +210,32 @@ file and their parameters. More detailed explanations can be found in the
 
     The initial `a`, `b` and `c` parameters estimates for the exponential
     fit. The exponential function is: `I(t) = a*exp(b*t) + c`, and it is used
-    to calculate the CRT.
-
+    to calculate the pCRT.
 
 ## General
+
+* **enabledPlots**: array of strings, default = `["bgr_g", "lab_a", "edges"]`
+
+    Which plots will created, shown and saved in the plots directory. Accepts
+    the following strings:
+
+    `"bgr_g"`: Enables the pCRT and CRT 90-10% plots on the BGR G channel.
+
+    `"lab_a"`: Enables the pCRT and CRT 90-10% plots on the LAB A channel.
+
+    `"edges"`: Enables the edge detection plot.
 
 * **showPlots**: boolean, default = `true`
 
     Whether or not to show the Average Intensities and CRT plots after CRT
-    calculation. In either case, the plots will still be saved to the plots
-    directory specified in plotPath.
+    calculation. Only the plots listed on `enabledPlots` will be created. In
+    either case, the plots will still be saved to the plots directory
+    specified in plotPath.
+
+* **simplerPlots**: boolean, default = `true`
+
+    Includes less information in the plots enabled on `enabledPlots`, intended
+    to reduce clutter from data that is only relevant for debugging.
 
 * **askConfirmation**: boolean, default = `true`
 
@@ -243,7 +244,7 @@ file and their parameters. More detailed explanations can be found in the
     confirmation pop-up after each video, asking if it should continue to the
     next video in the list or manually select another video.
 
-* **logLevel**: string, default = `"DEBUG"`
+* **logLevel**: string, default = `"INFO"`
 
     How detailed the log should be. The options are, in decreasing level of
     detail: `"DEBUG"`, `"INFO"`, `"WARNING"` and `"ERROR"`.
@@ -259,18 +260,8 @@ file and their parameters. More detailed explanations can be found in the
 This is a list of features I would like to implement (I don't promise I will
 actually implement them all):
 
-* Add option to view the plots and CRT before saving;
 * Try to implement interactive fromTime, toTime and algorithm selection;
-* Implement PCA results as a channel;
-* Develop algorithm to find appropriate fromTime and toTime;
-* Add fromTime and toTime to avgIntensPlot;
-* Add monochrome as a possible channel;
 * Add tests for pyCRTScripts;
-* Add 9010 as an algorithm;
-* Add timestamp to csv;
-* Add input "Test another video?";
-* Add tests;
-* Output error messages to the log;
 * Create specific exception types for not selecting the ROI and for failed CRT
   fit;
 * Add option to ignore duplicates in multiVideoPipeline;

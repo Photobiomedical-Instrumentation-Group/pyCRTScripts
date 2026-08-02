@@ -6,8 +6,8 @@ provideXLSX = true
 overwrite = false
 
 [Video]
-showEdgeDetection = true
 showVideoFrames = true
+showEdgeDetection = false
 playbackSpeed = "fast"
 
 [Measurement]
@@ -15,47 +15,14 @@ roi = -1
 rescaleFactor = 0.5
 fromTime = -1
 toTime = -1
-pCRTAlgorithm = "best fit"
+pCRTAlgorithm = "first that works"
 maxUncertaintyRatio = 1.0
 initialGuesses = [1.0, -0.5, 0.0]
 
-[ReleaseFrameDetection]
-algorithm = "laplacian"
-medianKernelRadius = 1
-
-[ReleaseFrameDetection.canny]
-thresh1 = 47
-thresh2 = 64
-blurKernel = 5
-l2grad = true
-cannyPlateau = 8.261879165862927
-cannySmoothingKernel = 1
-cannyGradientSmoothingKernel = 3
-indexOffset = 2
-
-[ReleaseFrameDetection.laplacian]
-scale = 1
-delta = 0
-ksize = 3
-blurKernel = 8
-laplacianPlateau = 1.7953339084618558
-laplacianSmoothingKernel = 17
-laplacianGradientSmoothingKernel = 5
-indexOffset = -2
-
-[AverageIntensitySlicing]
-offsetTime = 0.11661660491425706
-relaxMaxGrad = 2.536292017645295
-relaxMinGrad = -8.56556328743744
-strictMaxGrad = 1.586869761784238
-strictMinGrad = -1.08886950239089
-
 [General]
 askConfirmation = true
-showAllPlots = false
-showBGRPlot = true
-showLABPlot = true
-showEdgeDetectionPlot = false
-simplerPlots = true
 writeLogFile = true
-logLevel = "DEBUG"
+logLevel = "INFO"
+enabledPlots = ["bgr_g", "lab_a"]
+showPlots = true
+simplerPlots = true

@@ -33,14 +33,6 @@ from pyCRT.simpleUI import DATETIME_FORMAT, DISPLAY_FORMAT, PCRT, RoiTuple
 
 plt.style.use("bmh")
 
-PLAYBACK_FPS_SPEED = {
-    "fast": np.inf,
-    "normal": 0,
-    "slow": 25,
-}
-
-NORM_LEVEL = 25
-logging.addLevelName(NORM_LEVEL, "NORM")
 VIDEO_FORMATS = (".mp4", ".wmv", ".avi", ".mov", ".mkv")
 RELEASE_FRAME_RESCALE_FACTOR = 0.5
 CRT_LOG_LABELS = {
@@ -173,6 +165,57 @@ def normalizeIntensities(array: np.ndarray) -> np.ndarray:
     if len(array) == 0 or array.max() == array.min():
         return np.zeros_like(array)
     return (array - array.min()) / (array.max() - array.min())
+
+
+# }}}
+
+
+def playbackWaitMsFromCapture(cap, playbackSpeed: str) -> int:
+    # {{{
+    playbackSpeed = str(playbackSpeed).strip().lower()
+    if playbackSpeed == "fast":
+        return 1
+    if playbackSpeed == "slow":
+        return 100
+    if playbackSpeed != "medium":
+        raise ValueError(
+            f"'{playbackSpeed}' is not a valid playbackSpeed. "
+            "Valid values are 'fast', 'medium' or 'slow'."
+        )
+
+    fps = float(cap.get(cv.CAP_PROP_FPS))
+    if not np.isfinite(fps) or fps < 5 or fps > 65:
+        fps = 30.0
+    return max(1, round(1000.0 / fps))
+
+
+# }}}
+
+
+def plotSectionsFromConfig(configDict: dict[str, Any]) -> set[str]:
+    # {{{
+    enabledPlots = configDict.get("General", {}).get("enabledPlots", [])
+    validPlots = {
+        "bgr_g": "bgr",
+        "lab_a": "lab",
+        "edges": "edge",
+    }
+    sections = set()
+    for plotName in enabledPlots:
+        if plotName not in validPlots:
+            raise ValueError(
+                f"Unsupported plot name in General.enabledPlots: {plotName!r}. "
+                "Expected 'bgr_g', 'lab_a', or 'edges'."
+            )
+        sections.add(validPlots[plotName])
+    return sections
+
+# }}}
+
+
+def shouldSaveDiagnosticPlot(configDict: dict[str, Any]) -> bool:
+    # {{{
+    return bool(plotSectionsFromConfig(configDict))
 
 
 # }}}
@@ -369,7 +412,7 @@ def createCrtMeasurementPlot(
     videoPath = Path(videoPath)
     metricDetails = metricDetails or {}
     metricErrors = metricErrors or {}
-    plotSections = set(plotSections or {"bgr", "lab", "edge"})
+    plotSections = {"bgr", "lab", "edge"} if plotSections is None else set(plotSections)
     selectedChannels = []
     if "bgr" in plotSections:
         selectedChannels.append(("BGR G", bgrGIntensArr, "tab:green", "bgr_g", "bgr"))
@@ -586,7 +629,7 @@ def createAverageIntensityFailurePlot(
 ):
     # {{{
     videoPath = Path(videoPath)
-    plotSections = set(plotSections or {"bgr", "lab", "edge"})
+    plotSections = {"bgr", "lab", "edge"} if plotSections is None else set(plotSections)
     selectedChannels = []
     if "bgr" in plotSections:
         selectedChannels.append(("BGR G", bgrGIntensArr, "tab:green", "bgr"))
@@ -705,17 +748,8 @@ def measureCRTVideoFromConfig(
     # {{{
     videoPath = Path(videoPath)
     generalConfig = configDict.get("General", {})
-    showAllPlots = bool(
-        generalConfig.get("showAllPlots", generalConfig.get("showPlots", False))
-    )
-    plotSections = set()
-    if showAllPlots or generalConfig.get("showBGRPlot", False):
-        plotSections.add("bgr")
-    if showAllPlots or generalConfig.get("showLABPlot", False):
-        plotSections.add("lab")
-    if showAllPlots or generalConfig.get("showEdgeDetectionPlot", False):
-        plotSections.add("edge")
-    showPlots = bool(plotSections)
+    plotSections = plotSectionsFromConfig(configDict)
+    showPlots = bool(generalConfig.get("showPlots", False))
     simplerPlots = bool(generalConfig.get("simplerPlots", False))
     measurementConfig = configDict["Measurement"]
     fromTime = float(measurementConfig.get("fromTime", -1))
@@ -831,7 +865,7 @@ def measureCRTVideoFromConfig(
         )
     except Exception as err:
         LOGGER.debug(f"{videoPath.name}: CRT calculation failed: {err}")
-        if showPlots:
+        if showPlots and plotSections:
             failureFig = createAverageIntensityFailurePlot(
                 videoPath,
                 labAIntensArr,
@@ -876,7 +910,7 @@ def measureCRTVideoFromConfig(
     }
     logMeasurementMetrics(result)
 
-    if savePlot or showPlots:
+    if (savePlot or showPlots) and plotSections:
         fig = createCrtMeasurementPlot(
             videoPath,
             labAIntensArr,
@@ -890,7 +924,7 @@ def measureCRTVideoFromConfig(
             metricDetails=metricDetails,
             metricErrors=metricErrors,
             releaseMetricData=releaseMetricData,
-            plotSections=plotSections or {"bgr", "lab", "edge"},
+            plotSections=plotSections,
             simplerPlots=simplerPlots,
         )
         if savePlot:
@@ -946,16 +980,6 @@ def detectReleaseFrameFromVideo(
         )
 
     playbackSpeed = str(playbackSpeed).strip().lower()
-    playbackWaitMsBySpeed = {
-        "fast": 1,
-        "medium": 33,
-        "slow": 100,
-    }
-    if playbackSpeed not in playbackWaitMsBySpeed:
-        raise ValueError(
-            f"'{playbackSpeed}' is not a valid playbackSpeed. "
-            "Valid values are 'fast', 'medium' or 'slow'."
-        )
 
     medianKernelRadius = int(params.get("medianKernelRadius", 1))
     measurementRescaleFactor = float(measurementRescaleFactor)
@@ -969,6 +993,7 @@ def detectReleaseFrameFromVideo(
 
     if requireRoiSelection:
         with videoCapture(str(videoPath)) as cap:
+            playbackWaitMs = playbackWaitMsFromCapture(cap, playbackSpeed)
             for frame in frameReader(cap):
                 if medianKernelRadius > 0:
                     medianFrame = cv.medianBlur(frame, (2 * medianKernelRadius) + 1)
@@ -986,7 +1011,7 @@ def detectReleaseFrameFromVideo(
                     measurementBgrFrame.shape[0],
                 )
                 cv.imshow(bgrWindowName, measurementBgrFrame)
-                key = cv.waitKey(playbackWaitMsBySpeed[playbackSpeed]) & 0xFF
+                key = cv.waitKey(playbackWaitMs) & 0xFF
                 if key == ord(" "):
                     selectedRoi = cv.selectROI(bgrWindowName, measurementBgrFrame)
                     if selectedRoi[2] > 0 and selectedRoi[3] > 0:
@@ -1019,6 +1044,9 @@ def detectReleaseFrameFromVideo(
     times = []
 
     with videoCapture(str(videoPath)) as cap:
+        playbackWaitMs = None
+        if (showEdgeDetection and not skipReleaseDetection) or showVideoFrames:
+            playbackWaitMs = playbackWaitMsFromCapture(cap, playbackSpeed)
         for frame in frameReader(cap):
             timeScds = cap.get(cv.CAP_PROP_POS_MSEC) / 1000.0
             if medianKernelRadius > 0:
@@ -1099,7 +1127,7 @@ def detectReleaseFrameFromVideo(
                     )
 
             if (showEdgeDetection and not skipReleaseDetection) or showVideoFrames:
-                key = cv.waitKey(playbackWaitMsBySpeed[playbackSpeed]) & 0xFF
+                key = cv.waitKey(playbackWaitMs) & 0xFF
                 if key == ord(" ") and showVideoFrames and not requireRoiSelection:
                     selectedRoi = cv.selectROI(bgrWindowName, measurementBgrFrame)
                     if selectedRoi[2] > 0 and selectedRoi[3] > 0:
@@ -1635,7 +1663,7 @@ def metricSummaryValues(measurement: dict[str, Any], metricKey: str) -> dict[str
 
 def measurementCSVColumns() -> list[str]:
     # {{{
-    columns = ["Video", "releaseTime", "measurementTime"]
+    columns = ["Video"]
     for metricKey in CRT_METRIC_KEYS:
         prefix = metricColumnPrefix(metricKey)
         columns.extend(
@@ -1646,6 +1674,7 @@ def measurementCSVColumns() -> list[str]:
         )
         if metricHasCriticalTime(metricKey):
             columns.append(f"{prefix}_criticalTime")
+    columns.extend(["releaseTime", "measurementTime"])
     return columns
 
 
@@ -1657,11 +1686,7 @@ def measurementCSVRow(
     videoName: str | None = None,
 ) -> dict[str, Any]:
     # {{{
-    row = {
-        "Video": measurementVideoName(measurement, videoName),
-        "releaseTime": float(measurement.get("releaseTime", np.nan)),
-        "measurementTime": measurementTimeString(measurement),
-    }
+    row = {"Video": measurementVideoName(measurement, videoName)}
     for metricKey in CRT_METRIC_KEYS:
         prefix = metricColumnPrefix(metricKey)
         summary = metricSummaryValues(measurement, metricKey)
@@ -1669,6 +1694,8 @@ def measurementCSVRow(
         row[f"{prefix}_uncertainty"] = summary["uncertainty"]
         if metricHasCriticalTime(metricKey):
             row[f"{prefix}_criticalTime"] = summary["criticalTime"]
+    row["releaseTime"] = float(measurement.get("releaseTime", np.nan))
+    row["measurementTime"] = measurementTimeString(measurement)
     return row
 
 
@@ -1921,14 +1948,7 @@ def singleVideoPipeline(
         measurement = measureCRTVideoFromConfig(
             crtVideoPath,
             configDict,
-            savePlot=bool(
-                configDict["General"].get(
-                    "showAllPlots", configDict["General"].get("showPlots", False)
-                )
-                or configDict["General"].get("showBGRPlot", False)
-                or configDict["General"].get("showLABPlot", False)
-                or configDict["General"].get("showEdgeDetectionPlot", False)
-            ),
+            savePlot=shouldSaveDiagnosticPlot(configDict),
         )
         saveMeasurementOutputsFromConfig(measurement, configDict)
     except Exception as e:
@@ -1956,14 +1976,7 @@ def multiVideoPipeline(
     askConfirmation = configDict["General"]["askConfirmation"]
     processedPaths = []
     failedMeasurements = 0
-    showPlots = bool(
-        configDict["General"].get(
-            "showAllPlots", configDict["General"].get("showPlots", False)
-        )
-        or configDict["General"].get("showBGRPlot", False)
-        or configDict["General"].get("showLABPlot", False)
-        or configDict["General"].get("showEdgeDetectionPlot", False)
-    )
+    saveDiagnosticPlot = shouldSaveDiagnosticPlot(configDict)
 
     dirPath = gui.selectDirectory()
     for candidatePath in dirPath.iterdir():
@@ -2001,7 +2014,7 @@ def multiVideoPipeline(
             measurement = measureCRTVideoFromConfig(
                 actualPath,
                 configDict,
-                savePlot=showPlots,
+                savePlot=saveDiagnosticPlot,
             )
             saveMeasurementOutputsFromConfig(measurement, configDict)
             processedPaths.append(actualPath)
