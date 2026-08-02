@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 from datetime import datetime
@@ -194,10 +195,10 @@ def roiForReleaseScale(
     scaleFactor = RELEASE_FRAME_RESCALE_FACTOR / measurementRescaleFactor
     x, y, width, height = roi
     return (
-        int(round(x * scaleFactor)),
-        int(round(y * scaleFactor)),
-        max(1, int(round(width * scaleFactor))),
-        max(1, int(round(height * scaleFactor))),
+        round(x * scaleFactor),
+        round(y * scaleFactor),
+        max(1, round(width * scaleFactor)),
+        max(1, round(height * scaleFactor)),
     )
 
 
@@ -998,10 +999,8 @@ def detectReleaseFrameFromVideo(
                     break
 
         if showVideoFrames is False:
-            try:
+            with contextlib.suppress(cv.error):
                 cv.destroyWindow(bgrWindowName)
-            except cv.error:
-                pass
 
     if requireRoiSelection and not roiSelected:
         raise RuntimeError(
@@ -1127,10 +1126,8 @@ def detectReleaseFrameFromVideo(
             "Canny release frame",
             "Laplacian | L",
         ):
-            try:
+            with contextlib.suppress(cv.error):
                 cv.destroyWindow(windowName)
-            except cv.error:
-                pass
 
     timeArr = np.asarray(times, dtype=float)
     labAIntensArr = np.asarray(labAIntensities, dtype=float)
@@ -1579,6 +1576,14 @@ def metricColumnPrefix(metricKey: str) -> str:
 # }}}
 
 
+def metricHasCriticalTime(metricKey: str) -> bool:
+    # {{{
+    return metricKey.endswith("_pcrt")
+
+
+# }}}
+
+
 def measurementVideoName(
     measurement: dict[str, Any],
     videoName: str | None = None,
@@ -1637,9 +1642,10 @@ def measurementCSVColumns() -> list[str]:
             [
                 prefix,
                 f"{prefix}_uncertainty",
-                f"{prefix}_criticalTime",
             ]
         )
+        if metricHasCriticalTime(metricKey):
+            columns.append(f"{prefix}_criticalTime")
     return columns
 
 
@@ -1661,7 +1667,8 @@ def measurementCSVRow(
         summary = metricSummaryValues(measurement, metricKey)
         row[prefix] = summary["value"]
         row[f"{prefix}_uncertainty"] = summary["uncertainty"]
-        row[f"{prefix}_criticalTime"] = summary["criticalTime"]
+        if metricHasCriticalTime(metricKey):
+            row[f"{prefix}_criticalTime"] = summary["criticalTime"]
     return row
 
 
@@ -1797,7 +1804,8 @@ def measurementNpzData(
         summary = metricSummaryValues(measurement, metricKey)
         data[metricKey] = summary["value"]
         data[f"{metricKey}_uncertainty"] = summary["uncertainty"]
-        data[f"{metricKey}_criticalTime"] = summary["criticalTime"]
+        if metricHasCriticalTime(metricKey):
+            data[f"{metricKey}_criticalTime"] = summary["criticalTime"]
 
     return data
 
@@ -1887,8 +1895,8 @@ def stringToRoi(roiString: str) -> RoiTuple:
     if not isinstance(roiString, str):
         raise TypeError("The argument to stringToRoi must be a string")
     numbers = roiString.strip()[1:-2]
-    roi = tuple(int(x) for x in numbers.split("c "))
-    return roi
+    return tuple(int(x) for x in numbers.split("c "))
+    # return roi
 
 
 # }}}
@@ -1907,7 +1915,7 @@ def singleVideoPipeline(
         enableFileLogging(LOGGER)
 
     crtVideoPath = gui.selectFile()
-    videoName = crtVideoPath.stem
+    # videoName = crtVideoPath.stem
 
     try:
         measurement = measureCRTVideoFromConfig(
@@ -1982,15 +1990,13 @@ def multiVideoPipeline(
                 continue
             if answer == "abort":
                 break
-            if answer == "select":
-                actualPath = gui.selectFile()
-            else:
-                actualPath = candidatePath
+
+            actualPath = gui.selectFile() if answer == "select" else candidatePath
         else:
             actualPath = candidatePath
 
         LOGGER.info(f"Processing video {actualPath}.")
-        videoName = actualPath.stem
+        # videoName = actualPath.stem
         try:
             measurement = measureCRTVideoFromConfig(
                 actualPath,
