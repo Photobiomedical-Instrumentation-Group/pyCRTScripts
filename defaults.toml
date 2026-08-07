@@ -8,7 +8,7 @@ overwrite = false  # Replace existing output rows/files instead of creating uniq
 [Video]
 showEdgeDetection = false  # Show the live release-detection frame while processing.
 showVideoFrames = false  # Show the live BGR frame with the measurement ROI while processing.
-playbackSpeed = "fast"  # OpenCV display delay for live windows: fast, medium, or slow.
+playbackSpeed = "medium"  # OpenCV display delay for live windows: fast, normal, or slow.
 
 [Measurement]
 roi = -1  # Measurement ROI at Measurement.rescaleFactor; -1 prompts ROI selection, "all" uses the full frame.

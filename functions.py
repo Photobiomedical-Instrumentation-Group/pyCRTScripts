@@ -177,10 +177,10 @@ def playbackWaitMsFromCapture(cap, playbackSpeed: str) -> int:
         return 1
     if playbackSpeed == "slow":
         return 100
-    if playbackSpeed != "medium":
+    if playbackSpeed != "normal":
         raise ValueError(
             f"'{playbackSpeed}' is not a valid playbackSpeed. "
-            "Valid values are 'fast', 'medium' or 'slow'."
+            "Valid values are 'fast', 'normal' or 'slow'."
         )
 
     fps = float(cap.get(cv.CAP_PROP_FPS))

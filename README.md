@@ -39,8 +39,18 @@ is expected. Simply click "More info" -> "Run anyway".
    in the directory. *If you do not see the window, it might have appeared
    under another window, such as the terminal.*
 4. If a Region of Interest (ROI) was not specified in the configuration file
-   (see below), press the spacebar key when pressure is being applied, click
-   and drag the mouse to draw a square around the desired ROI.
+   (see below), press the spacebar key **once** when pressure is being applied
+   (i.e. when a finger, rod, or other instrument is touching the skin and
+   applying pressure). The video will be paused and you can click and drag the
+   mouse to draw a square around the desired ROI. It is highly recommended
+   that the ROI encompass the **entire area of the pressure application
+   instrument** with a small margin, as in the pictures below:
+
+   ![Examples of adequate ROI selection](ManualImages/roi_examples.png)
+
+   Once the ROI has been drawn, **press the spacebar again** to confirm the
+   selection. Video playback should start from the beginning.
+
 5. Check the terminal. If a ROI was selected manually, it should appear there
    as a list of 4 numbers.
 6. Wait for video playback to finish.
@@ -122,7 +132,7 @@ file and their parameters:
     [Measurement](#measurement)/roi is not specified (i.e. set to `-1`), the
     video frames will be displayed until the user selects the ROI.
 
-* **playbackSpeed**: string, default = `"fast"`
+* **playbackSpeed**: string, default = `"normal"`
 
     What is the maximum speed at which the video should be played. This
     parameter accepts 3 possible values:

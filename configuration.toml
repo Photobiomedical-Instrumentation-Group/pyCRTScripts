@@ -8,7 +8,7 @@ overwrite = false
 [Video]
 showVideoFrames = true
 showEdgeDetection = false
-playbackSpeed = "fast"
+playbackSpeed = "normal"
 
 [Measurement]
 roi = -1

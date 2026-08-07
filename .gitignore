@@ -1,6 +1,8 @@
 *.wmv
 *.csv
 *.png
+!ManualImages/
+!ManualImages/**/*.png
 *.mp4
 *.npz
 *.MOV
